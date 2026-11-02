@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+dist/
+*.spec.bak
+.pytest_cache/
+*.log
+# рабочие PDF не коммитим
+*.pdf
