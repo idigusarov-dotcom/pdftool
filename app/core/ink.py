@@ -37,6 +37,49 @@ def blue_ink_alpha(rgb: np.ndarray, sat_min: float = 14, hue_lo: float = 92, hue
     return a.astype(np.float32)
 
 
+INK_MODES = {"blue": "синяя", "black": "чёрная", "any": "любая"}
+
+
+def _remove_long_lines(mask: np.ndarray, min_len: int) -> np.ndarray:
+    """Убирает длинные горизонтальные и вертикальные отрезки (линии бланка)."""
+    out = mask.copy()
+    for axis in (1, 0):
+        m = mask if axis == 1 else mask.T
+        o = out if axis == 1 else out.T
+        # длина серии подряд идущих пикселей вдоль оси
+        d = np.diff(np.pad(m.astype(np.int8), ((0, 0), (1, 1))), axis=1)
+        for r in range(m.shape[0]):
+            starts = np.nonzero(d[r] == 1)[0]
+            ends = np.nonzero(d[r] == -1)[0]
+            for s0, e0 in zip(starts, ends):
+                if e0 - s0 >= min_len:
+                    o[r, s0:e0] = False
+    return out
+
+
+def ink_alpha(rgb: np.ndarray, mode: str = "blue", sensitivity: float = 0.5) -> np.ndarray:
+    """Маска чернил 0..1. mode: blue — синие/фиолетовые; black — тёмные серые/чёрные
+    (линии бланка убираются); any — любые не-белые. sensitivity 0..1: выше — берём бледнее."""
+    sens = float(np.clip(sensitivity, 0, 1))
+    if mode == "blue":
+        return blue_ink_alpha(rgb, sat_min=26 - 24 * sens)  # 0.5 → 14, как в job2
+    gray = rgb.astype(np.float32).mean(-1)
+    thr = 120 + 110 * sens          # порог яркости
+    a = np.clip((thr - gray) / 40.0, 0, 1)
+    if mode == "black":
+        sat = _rgb_to_hsv_cv(rgb)[..., 1]
+        a = a * (sat < 80)
+        h, w = a.shape
+        lines = (a > 0.3) & ~_remove_long_lines(a > 0.3, max(40, int(0.35 * w)))
+        if h > 40:
+            lines |= (a > 0.3) & ~_remove_long_lines((a > 0.3), max(40, int(0.5 * h)))
+        # расширяем найденные линии на 1 пиксель, чтобы не оставались «тени»
+        from PIL import ImageFilter
+        lines = np.asarray(Image.fromarray((lines * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(3))) > 0
+        a = a * ~lines
+    return a.astype(np.float32)
+
+
 def _remove_specks(a: np.ndarray, radius: int = 7, min_pixels: int = 30) -> np.ndarray:
     """Убирает одиночные точки (пыль скана): оставляем чернила только там, где в окне
     (2*radius+1)^2 набирается не меньше min_pixels «уверенных» пикселей. Без OpenCV."""
@@ -49,9 +92,10 @@ def _remove_specks(a: np.ndarray, radius: int = 7, min_pixels: int = 30) -> np.n
     return a * (np.asarray(keep) > 0)
 
 
-def extract_ink(rgb: np.ndarray, color=DEFAULT_INK_RGB, uniform: bool = True) -> np.ndarray:
+def extract_ink(rgb: np.ndarray, color=DEFAULT_INK_RGB, uniform: bool = True,
+                mode: str = "blue", sensitivity: float = 0.5) -> np.ndarray:
     """Возвращает RGBA (H,W,4) uint8: только чернила, фон прозрачный."""
-    a = blue_ink_alpha(rgb)
+    a = ink_alpha(rgb, mode, sensitivity)
     a = _remove_specks(a)
     a = np.power(a, 0.7)
     v = a[a > 0.4]

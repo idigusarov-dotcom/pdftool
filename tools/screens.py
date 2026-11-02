@@ -1,5 +1,7 @@
 """Скриншоты вкладок без экрана: QT_QPA_PLATFORM=offscreen python tools/screens.py"""
 import os
+
+os.environ["PDFTOOL_SETTINGS"] = "PdfToolTest"
 import sys
 import tempfile
 
@@ -16,14 +18,18 @@ D = os.environ.get("PDFTOOL_DATA", "/workspace")
 OUT = os.path.join(os.path.dirname(__file__), "..", "screens")
 os.makedirs(OUT, exist_ok=True)
 app = QApplication(sys.argv)
+from app.ui.infra import settings  # noqa: E402
+settings().clear()
 w = MainWindow()
 w.resize(1500, 950)
 w.show()
 
 
 def shot(name):
-    for _ in range(5):
+    import time
+    for _ in range(20):
         app.processEvents()
+        time.sleep(0.03)
     w.grab().save(os.path.join(OUT, name))
 
 
@@ -31,18 +37,23 @@ tmp = tempfile.mkdtemp()
 w.sign.open_acts(f"{D}/job2/fileB_3.5MB.pdf")
 w.sign.open_receipts(f"{D}/job2/fileA_3.0MB.pdf")
 w.sign.set_mapping([3, 4, 7, 6, None, 0, 2])
-w.sign.table.setCurrentCell(0, 1)
+w.sign.table.setCurrentCell(0, 2)
 w.sign.show_row(0)
+w.sign.update_ink_preview()
 shot("1_podpisi.png")
 w.sign.save(os.path.join(tmp, "sign.pdf"))
 
 w.tabs.setCurrentIndex(1)
 w.sort.open(f"{D}/job3/input.pdf")
-w.sort.set_values([str(x) for x in (41, 38, 80, 40, 107, 89, 121, 83, 77, 141, 43, 34, 87, 81, 26, 91, 133, 58, 130, 127,
-                                    124, 52, 84, 123, 24, 75, 72, 69, 144, 126, 147, 90, 116, 119, 110, 113, 112, 138, 150, 48,
-                                    46, 55, 45, 42, 32, 49, 117, 114, 35, 33, 36, 39, 100, 37, 44, 108, 132, 109, 94, 31, 97)]
-                  + [None] * 100)
-w.sort.table.item(3, 1).setText("41")  # пример повтора
+w.sort.recognize()
+import time  # noqa: E402
+t0 = time.time()
+while not any(w.sort.values_by_page()) and time.time() - t0 < 60:
+    app.processEvents()
+    time.sleep(0.05)
+for _ in range(30):
+    app.processEvents()
+    time.sleep(0.03)
 w.sort.table.setCurrentCell(0, 1)
 shot("2_sortirovka.png")
 w.sort.save(os.path.join(tmp, "sorted.pdf"))

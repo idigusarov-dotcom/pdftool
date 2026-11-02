@@ -8,7 +8,7 @@ import numpy as np
 import pymupdf
 
 from .ink import extract_ink, has_ink, to_png_bytes
-from .pdfutil import NRect, render_page, save_doc
+from .pdfutil import NRect, insert_png, render_page, save_doc
 
 # Значения по умолчанию подобраны по реальным актам/распискам (Кржижановского 5/1)
 DEFAULT_SRC_RECT = NRect(0.139, 0.770, 0.701, 0.840)   # блок «В чем и расписываемся» в акте
@@ -28,6 +28,8 @@ class TransferJob:
     dpi: int = 200
     uniform_color: bool = True
     trim_left: bool = True   # прижать подпись к левому краю целевой области
+    ink_mode: str = "blue"   # blue / black / any
+    sensitivity: float = 0.5
 
 
 def trim_x(rgba: np.ndarray, pad: int = 4) -> tuple[np.ndarray, float, float]:
@@ -46,7 +48,7 @@ def _place(page: pymupdf.Page, rgba: np.ndarray, src_pts: pymupdf.Rect, dst: pym
     if trim:
         rgba, _, frac_w = trim_x(rgba)
         full = pymupdf.Rect(full.x0, full.y0, full.x0 + full.width * frac_w, full.y1)
-    page.insert_image(full, stream=to_png_bytes(rgba), keep_proportion=False, overlay=True)
+    insert_png(page, full, to_png_bytes(rgba))
 
 
 def guess_mapping(n_receipts: int, n_acts: int) -> list[Optional[int]]:
@@ -55,11 +57,15 @@ def guess_mapping(n_receipts: int, n_acts: int) -> list[Optional[int]]:
 
 
 def cut_signature(acts: pymupdf.Document, act_index: int, rect: NRect, dpi: int = 200,
-                  uniform_color: bool = True) -> np.ndarray:
+                  uniform_color: bool = True, mode: str = "blue", sensitivity: float = 0.5) -> np.ndarray:
     img = render_page(acts, act_index, dpi)
     h, w = img.shape[:2]
     x0, y0, x1, y1 = rect.to_pixels(w, h)
-    return extract_ink(img[y0:y1, x0:x1], uniform=uniform_color)
+    return extract_ink(img[y0:y1, x0:x1], uniform=uniform_color, mode=mode, sensitivity=sensitivity)
+
+
+def _cut(job: "TransferJob", acts: pymupdf.Document, a: int, src: NRect) -> np.ndarray:
+    return cut_signature(acts, a, src, job.dpi, job.uniform_color, job.ink_mode, job.sensitivity)
 
 
 def fit_rect(src_w: float, src_h: float, target: pymupdf.Rect) -> pymupdf.Rect:
@@ -84,7 +90,7 @@ def apply_transfer(job: TransferJob, out_path: str,
             report["blank"].append(i)
             continue
         src = job.src_overrides.get(a, job.src_rect)
-        rgba = cut_signature(acts, a, src, job.dpi, job.uniform_color)
+        rgba = _cut(job, acts, a, src)
         if not has_ink(rgba):
             report["empty_ink"].append(i)
             continue
@@ -105,7 +111,7 @@ def preview_page(job: TransferJob, receipt_index: int, dpi: int = 100) -> np.nda
     a = job.mapping[receipt_index] if receipt_index < len(job.mapping) else None
     if a is not None:
         src = job.src_overrides.get(a, job.src_rect)
-        rgba = cut_signature(acts, a, src, job.dpi, job.uniform_color)
+        rgba = _cut(job, acts, a, src)
         if has_ink(rgba):
             dst = job.dst_overrides.get(receipt_index, job.dst_rect).to_points(page.rect)
             _place(page, rgba, src.to_points(acts[a].rect), dst, job.trim_left)

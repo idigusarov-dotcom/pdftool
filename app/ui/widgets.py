@@ -34,12 +34,16 @@ def np_to_pixmap(arr: np.ndarray) -> QPixmap:
 
 
 def ask_open_pdf(parent: QWidget, title="Выберите PDF") -> str:
-    p, _ = QFileDialog.getOpenFileName(parent, title, "", "PDF (*.pdf)")
+    from .infra import last_dir, remember_dir
+    p, _ = QFileDialog.getOpenFileName(parent, title, last_dir(), "PDF (*.pdf)")
+    remember_dir(p)
     return p
 
 
 def ask_save(parent: QWidget, suggested: str, flt="PDF (*.pdf)") -> str:
+    from .infra import remember_dir
     p, _ = QFileDialog.getSaveFileName(parent, "Сохранить как", suggested, flt)
+    remember_dir(p)
     return p
 
 
@@ -111,67 +115,127 @@ class BoxItem(QGraphicsRectItem):
 
 
 class PageView(QGraphicsView):
-    """Показ страницы. В режиме рисования — новая рамка мышью (левая кнопка на пустом месте)."""
-    rectChanged = Signal()
+    """Показ страницы с несколькими рамками (по ключу). Новая рамка рисуется мышью (ключ active).
+    Масштаб: Ctrl+колесо, кнопки zoom_in/zoom_out/fit."""
+    rectChanged = Signal(str)
+
+    COLORS = {"main": "#e53935", "zone": "#2e7d32", "zone2": "#00897b"}
 
     def __init__(self, parent=None, color="#e53935"):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
         self.setBackgroundBrush(QColor("#9e9e9e"))
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.page_item: QGraphicsPixmapItem | None = None
-        self.box: BoxItem | None = None
-        self.color = color
+        self.boxes: dict[str, BoxItem] = {}
+        self.colors = dict(self.COLORS, main=color)
+        self.active = "main"
         self.draw_enabled = True
         self._drag_start = None
+        self._auto_fit = True
         self.setMinimumSize(300, 300)
 
+    # совместимость: основная рамка
+    @property
+    def box(self):
+        return self.boxes.get("main")
+
+    @box.setter
+    def box(self, v):
+        if v is None:
+            self.boxes.pop("main", None)
+
+    def clear_boxes(self):
+        for b in list(self.boxes.values()):
+            if b.scene():
+                self.scene().removeItem(b)
+        self.boxes.clear()
+
     def set_page(self, pix: QPixmap):
-        nr = self.get_nrect()
-        overlay = self.box.pixmap if self.box else None
+        saved = {k: (self.get_nrect(k), b.pixmap) for k, b in self.boxes.items()}
         self.scene().clear()
-        self.box = None
+        self.boxes.clear()
         self.page_item = self.scene().addPixmap(pix)
+        self.page_item.setTransformationMode(Qt.SmoothTransformation)
         self.scene().setSceneRect(QRectF(pix.rect()))
-        if nr:
-            self.set_nrect(nr, overlay)
-        self.fit()
+        for k, (nr, pm) in saved.items():
+            if nr:
+                self.set_nrect(nr, pm, key=k, emit=False)
+        if self._auto_fit:
+            self.fit()
+
+    def show_message(self, text: str):
+        self.scene().clear()
+        self.boxes.clear()
+        self.page_item = None
+        self.scene().addText(text)
 
     def fit(self):
         if self.page_item:
+            self._auto_fit = True
+            self.resetTransform()
             self.fitInView(self.page_item, Qt.KeepAspectRatio)
+
+    def zoom(self, factor: float):
+        self._auto_fit = False
+        self.scale(factor, factor)
+
+    def zoom_in(self):
+        self.zoom(1.25)
+
+    def zoom_out(self):
+        self.zoom(0.8)
+
+    def wheelEvent(self, e):
+        if e.modifiers() & Qt.ControlModifier:
+            self.zoom(1.15 if e.angleDelta().y() > 0 else 1 / 1.15)
+            e.accept()
+            return
+        super().wheelEvent(e)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
-        self.fit()
+        if self._auto_fit:
+            self.fit()
 
     def _size(self):
         r = self.page_item.pixmap().rect()
         return r.width(), r.height()
 
-    def set_nrect(self, nr: NRect, pixmap: QPixmap | None = None):
-        if not self.page_item:
+    def set_nrect(self, nr: NRect, pixmap: QPixmap | None = None, key: str = "main", emit: bool = True):
+        if not self.page_item or nr is None:
             return
         w, h = self._size()
         n = nr.normalized()
-        rect = QRectF(n.x0 * w, n.y0 * h, (n.x1 - n.x0) * w, (n.y1 - n.y0) * h)
-        if self.box:
-            self.scene().removeItem(self.box)
-        self.box = BoxItem(rect, self.color, pixmap, on_change=self.rectChanged.emit)
-        self.scene().addItem(self.box)
-        self.rectChanged.emit()
+        rect = QRectF(n.x0 * w, n.y0 * h, max(4.0, (n.x1 - n.x0) * w), max(4.0, (n.y1 - n.y0) * h))
+        old = self.boxes.get(key)
+        if old is not None and old.scene():
+            self.scene().removeItem(old)
+        b = BoxItem(rect, self.colors.get(key, "#e53935"), pixmap, on_change=lambda k=key: self.rectChanged.emit(k))
+        self.boxes[key] = b
+        self.scene().addItem(b)
+        if emit:
+            self.rectChanged.emit(key)
 
-    def get_nrect(self) -> NRect | None:
-        if not (self.box and self.page_item):
+    def remove_box(self, key: str):
+        b = self.boxes.pop(key, None)
+        if b is not None and b.scene():
+            self.scene().removeItem(b)
+
+    def get_nrect(self, key: str = "main") -> NRect | None:
+        b = self.boxes.get(key)
+        if not (b and self.page_item):
             return None
         w, h = self._size()
-        r = self.box.scene_rect()
+        r = b.scene_rect()
         return NRect(r.left() / w, r.top() / h, r.right() / w, r.bottom() / h)
 
     def mousePressEvent(self, e):
         item = self.itemAt(e.position().toPoint())
+        act = self.boxes.get(self.active)
         if self.draw_enabled and self.page_item and e.button() == Qt.LeftButton and item is self.page_item \
-                and (self.box is None or self.box.pixmap is None):
+                and (act is None or act.pixmap is None):
             self._drag_start = self.mapToScene(e.position().toPoint())
             return
         super().mousePressEvent(e)
@@ -181,10 +245,29 @@ class PageView(QGraphicsView):
             p = self.mapToScene(e.position().toPoint())
             w, h = self._size()
             a = self._drag_start
-            self.set_nrect(NRect(a.x() / w, a.y() / h, p.x() / w, p.y() / h))
+            self.set_nrect(NRect(a.x() / w, a.y() / h, p.x() / w, p.y() / h), key=self.active, emit=False)
             return
         super().mouseMoveEvent(e)
 
     def mouseReleaseEvent(self, e):
-        self._drag_start = None
+        if self._drag_start is not None:
+            self._drag_start = None
+            self.rectChanged.emit(self.active)
+            return
         super().mouseReleaseEvent(e)
+
+
+def zoom_bar(view: PageView):
+    """Небольшая панель масштаба под просмотром страницы."""
+    from PySide6.QtWidgets import QHBoxLayout, QToolButton
+    lay = QHBoxLayout()
+    for text, tip, fn in (("−", "Уменьшить", view.zoom_out), ("+", "Увеличить (или Ctrl+колесо)", view.zoom_in),
+                          ("⤢", "По размеру окна", view.fit)):
+        b = QToolButton()
+        b.setText(text)
+        b.setToolTip(tip)
+        b.setStyleSheet("font-size: 16px; min-width: 30px;")
+        b.clicked.connect(fn)
+        lay.addWidget(b)
+    lay.addStretch()
+    return lay

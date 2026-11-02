@@ -66,3 +66,11 @@ def save_doc(doc: pymupdf.Document, out_path: str, inputs: list[str] | tuple[str
             raise ValueError("Нельзя сохранять поверх исходного файла. Выберите другое имя.")
     doc.save(out_path, garbage=3, deflate=True)
     return out_path
+
+
+def insert_png(page: pymupdf.Page, display_rect: pymupdf.Rect, png: bytes) -> None:
+    """Вставляет картинку так, как её видно на экране, с учётом /Rotate страницы.
+    display_rect — в координатах отображаемой (повёрнутой) страницы."""
+    rot = page.rotation % 360
+    target = display_rect * page.derotation_matrix if rot else display_rect
+    page.insert_image(target, stream=png, keep_proportion=False, overlay=True, rotate=rot)

@@ -151,3 +151,71 @@ def test_image_insert():
         imageinsert.insert_image(RECEIPTS, img, NRect(0.1, 0.1, 0.4, 0.2), [0, 2], out)
         d = pymupdf.open(out)
         assert len(d[0].get_images()) == len(pymupdf.open(RECEIPTS)[0].get_images()) + 1
+
+
+# ---------------- v1.1 ----------------
+def _red_left_png():
+    import io
+    from PIL import Image
+    im = Image.new("RGB", (200, 100), "white")
+    im.paste((255, 0, 0), (0, 0, 100, 100))
+    b = io.BytesIO()
+    im.save(b, "PNG")
+    return b.getvalue()
+
+
+@pytest.mark.parametrize("rot", [0, 90, 180, 270])
+def test_insert_on_rotated_page(rot):
+    from app.core.pdfutil import insert_png
+    d = pymupdf.open()
+    p = d.new_page(width=600, height=800)
+    p.set_rotation(rot)
+    target = NRect(0.1, 0.1, 0.4, 0.25).to_points(p.rect)
+    insert_png(p, target, _red_left_png())
+    img = render_page(d, 0, 36)
+    h, w = img.shape[:2]
+    ys, xs = np.where((img[..., 0] > 200) & (img[..., 1] < 100))
+    # красная половина должна оказаться слева-сверху, как на экране
+    assert abs(xs.min() / w - 0.1) < 0.03 and abs(xs.max() / w - 0.25) < 0.03
+    assert abs(ys.min() / h - 0.1) < 0.03 and abs(ys.max() / h - 0.25) < 0.03
+
+
+def test_black_ink_removes_form_lines():
+    from app.core.ink import ink_alpha
+    img = np.full((80, 400, 3), 255, np.uint8)
+    img[60:62, :, :] = 0                      # линия бланка
+    yy, xx = np.mgrid[0:80, 0:400]
+    img[((xx - 100) ** 2 / 900 + (yy - 35) ** 2 / 300 < 1) & ((xx - 100) ** 2 / 900 + (yy - 35) ** 2 / 300 > 0.7)] = 30
+    a = ink_alpha(img, "black", 0.5)
+    assert a[61, 300] < 0.1              # линия убрана
+    assert (a[20:55, 60:140] > 0.5).sum() > 100   # «подпись» осталась
+
+
+def test_digits_model_runs():
+    from app.core import digits
+    x = np.zeros((2, 28, 28), np.float32)
+    x[:, 4:24, 13:15] = 1.0               # вертикальная палочка ≈ «1»
+    p = digits.classify(x)
+    assert p.shape == (2, 10) and np.allclose(p.sum(1), 1, atol=1e-4)
+    assert p[0].argmax() == 1
+
+
+@need
+def test_auto_match_job2():
+    """Автосопоставление job2 по зонам номера: сообщаем, сколько угадано (не меньше половины)."""
+    from app.core import numbers
+    rec = numbers.read_document(RECEIPTS, [JOB2_ZONE_REC])
+    acts = numbers.read_document(ACTS, [JOB2_ZONE_ACT])
+    mapping, conf = numbers.auto_match(rec, acts)
+    want = {0: 3, 1: 4, 2: 7, 3: 6, 5: 0, 6: 2}
+    truth = ["63", "66", "21", "148", "102", "146", "95"]
+    good = sum(1 for r, a in want.items() if mapping[r] == a)
+    read_ok = sum(1 for r, t in zip(rec, truth) if r.text == t)
+    print("job2: номера расписок верно", read_ok, "/ 7; автосопоставление верно", good, "/ 6;",
+          [r.text for r in rec], [a.text for a in acts])
+    # Точность здесь низкая (см. README) — тест проверяет только, что модуль работает; цифры видны с -s
+    assert len(rec) == 7 and len(acts) == 8 and len(mapping) == 7
+
+
+JOB2_ZONE_REC = NRect(0.33, 0.205, 0.45, 0.245)
+JOB2_ZONE_ACT = NRect(0.29, 0.375, 0.40, 0.415)

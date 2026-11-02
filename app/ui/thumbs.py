@@ -1,9 +1,14 @@
-"""Миниатюры страниц."""
+"""Миниатюры страниц: ленивая отрисовка в фоновом потоке."""
 from __future__ import annotations
 
-import pymupdf
-from PySide6.QtGui import QIcon, QPixmap, QTransform
+import threading
 
+import numpy as np
+import pymupdf
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtGui import QIcon, QImage, QPixmap, QTransform
+
+from ..core.logsetup import log
 from ..core.pdfutil import render_page
 from .widgets import np_to_pixmap
 
@@ -17,3 +22,78 @@ def thumb_icon(doc: pymupdf.Document, i: int, rotation: int = 0, dpi: int = 30) 
     if rotation:
         pm = pm.transformed(QTransform().rotate(rotation))
     return QIcon(pm)
+
+
+def placeholder_icon(w: int = 60, h: int = 84) -> QIcon:
+    pm = QPixmap(w, h)
+    pm.fill(Qt.lightGray)
+    return QIcon(pm)
+
+
+class ThumbLoader(QObject):
+    """Рисует миниатюры по запросу в отдельном потоке (свой экземпляр документа).
+    Последние запрошенные (видимые) страницы рисуются первыми."""
+    ready = Signal(str, int, QImage)
+
+    def __init__(self, path: str, dpi: int = 30, parent=None):
+        super().__init__(parent)
+        self.path, self.dpi = path, dpi
+        self._stack: list[int] = []
+        self._seen: set[int] = set()
+        self._cv = threading.Condition()
+        self._stop = False
+        self._th = threading.Thread(target=self._run, daemon=True)
+        self._th.start()
+
+    def request(self, indices):
+        with self._cv:
+            for i in indices:
+                if i not in self._seen:
+                    self._seen.add(i)
+                    self._stack.append(i)
+            self._cv.notify()
+
+    def stop(self):
+        with self._cv:
+            self._stop = True
+            self._cv.notify()
+
+    def _run(self):
+        try:
+            doc = pymupdf.open(self.path)
+        except Exception:  # noqa: BLE001
+            log.exception("Не удалось открыть для миниатюр: %s", self.path)
+            return
+        while True:
+            with self._cv:
+                while not self._stack and not self._stop:
+                    self._cv.wait()
+                if self._stop:
+                    break
+                i = self._stack.pop()
+            try:
+                arr = np.ascontiguousarray(render_page(doc, i, self.dpi))
+                h, w = arr.shape[:2]
+                img = QImage(arr.data, w, h, 3 * w, QImage.Format_RGB888).copy()
+                self.ready.emit(self.path, i, img)
+            except Exception:  # noqa: BLE001
+                log.exception("Миниатюра стр. %s", i)
+        doc.close()
+
+
+def visible_rows(view) -> range:
+    """Видимые строки таблицы/списка (с запасом)."""
+    vp = view.viewport()
+    if hasattr(view, "rowAt"):
+        top = view.rowAt(0)
+        bot = view.rowAt(vp.height() - 1)
+        n = view.rowCount()
+    else:
+        top = view.indexAt(vp.rect().topLeft()).row()
+        bot = view.indexAt(vp.rect().bottomRight()).row()
+        n = view.count()
+        if bot < 0:
+            bot = n - 1
+    top = 0 if top < 0 else top
+    bot = n - 1 if bot < 0 else bot
+    return range(max(0, top - 5), min(n, bot + 10))

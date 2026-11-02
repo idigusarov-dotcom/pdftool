@@ -4,6 +4,7 @@ a = Analysis(
     ["run.py"],
     pathex=["."],
     hiddenimports=["pymupdf"],
+    datas=[("app/core/models/digits_cnn.npz", "app/core/models")],
     excludes=["tkinter", "matplotlib", "scipy", "pandas", "PySide6.QtNetwork", "PySide6.QtQml",
               "PySide6.QtQuick", "PySide6.QtWebEngineCore", "PySide6.QtMultimedia", "PySide6.Qt3DCore", "pytest", "pymupdf.layout", "pymupdf4llm", "onnxruntime", "cv2"],
     noarchive=False,
