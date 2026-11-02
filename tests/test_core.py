@@ -219,3 +219,62 @@ def test_auto_match_job2():
 
 JOB2_ZONE_REC = NRect(0.33, 0.205, 0.45, 0.245)
 JOB2_ZONE_ACT = NRect(0.29, 0.375, 0.40, 0.415)
+
+
+SYN = os.path.join(os.path.dirname(__file__), "..", "qa", "samples", "source_synthetic.pdf")
+
+
+@pytest.mark.skipif(not os.path.exists(SYN), reason="нет синтетического образца")
+@pytest.mark.parametrize("mode,keep", [("blue", True), ("black", True), ("color", True), ("any", True),
+                                       ("none", True), ("blue", False)])
+def test_fragment_cut_modes(mode, keep, tmp_path):
+    from app.core import fragment as fr
+    d = pymupdf.open(SYN)
+    stamp = NRect(0.445, 0.582, 0.675, 0.738)
+    rgba = fr.cut(d, 0, stamp, mode, 0.5, keep, dpi=150)
+    a = rgba[..., 3]
+    if mode == "none":
+        assert (a == 255).all()
+        return
+    cover = (a > 100).mean()
+    assert (0.002 if mode == "black" else 0.02) < cover < 0.8, cover   # фон убран, что-то вырезано
+    if mode == "color" and keep:
+        ink = rgba[a > 200][:, :3].astype(int)
+        assert (ink[:, 2] - ink[:, 1]).mean() > 30   # печать осталась сине-фиолетовой, не чёрной
+    t, frac = fr.trim(rgba)
+    assert t.shape[0] <= rgba.shape[0] and 0 <= frac[0] < frac[2] <= 1
+
+
+@pytest.mark.skipif(not os.path.exists(SYN), reason="нет синтетического образца")
+def test_fragment_black_handwriting_drops_form_lines():
+    from app.core import fragment as fr
+    d = pymupdf.open(SYN)
+    rgba = fr.cut(d, 0, NRect(0.10, 0.545, 0.53, 0.60), "black", 0.5, True, dpi=150)
+    assert (rgba[..., 3] > 100).sum() > 800
+    # в режиме «цветная печать» чёрный почерк не берётся
+    rgba2 = fr.cut(d, 0, NRect(0.10, 0.545, 0.53, 0.60), "color", 0.5, True, dpi=150)
+    assert (rgba2[..., 3] > 100).sum() < 0.05 * (rgba[..., 3] > 100).sum()
+
+
+@pytest.mark.skipif(not os.path.exists(SYN), reason="нет синтетического образца")
+@pytest.mark.parametrize("rot", [0, 90])
+def test_fragment_apply_any_place_and_rotation(rot, tmp_path):
+    from app.core import fragment as fr
+    tgt = tmp_path / "t.pdf"
+    doc = pymupdf.open()
+    p = doc.new_page(width=595, height=842)
+    p.set_rotation(rot)
+    doc.save(tgt)
+    dst = NRect(0.6, 0.1, 0.9, 0.2)
+    pl = fr.Placement(SYN, 0, NRect(0.10, 0.545, 0.53, 0.60), 0, dst, "black", 0.5, True)
+    out = tmp_path / "o.pdf"
+    fr.apply(str(tgt), [pl], str(out)).close()
+    img = render_page(pymupdf.open(out), 0, 72)
+    h, w = img.shape[:2]
+    dark = img.min(2) < 150
+    ys, xs = np.where(dark)
+    # чернила ровно в выбранном месте отображаемой страницы
+    assert xs.min() >= 0.6 * w - 3 and xs.max() <= 0.9 * w + 3
+    assert ys.min() >= 0.1 * h - 3 and ys.max() <= 0.2 * h + 3
+    with pytest.raises(Exception):
+        fr.apply(str(tgt), [pl], str(tgt))   # поверх исходника — нельзя

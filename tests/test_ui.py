@@ -148,7 +148,7 @@ def test_template_bar_and_batch_ui(win, tmp_path):
 
 # ---------- v1.3: интерфейс и пошаговые подсказки ----------
 def _screens(win):
-    return [win.sign, win.batch, win.sort, win.image, win.pages, win.helppage]
+    return [win.sign, win.batch, win.fragment, win.sort, win.image, win.pages, win.helppage]
 
 
 def test_tours_reference_real_widgets_and_run(win):
@@ -271,3 +271,52 @@ def test_buttons_have_tooltips_and_no_emoji(win):
                     bad.append((type(scr).__name__, b.text()))
             assert not any(ord(ch) > 0x2700 for ch in b.text()), b.text()   # эмодзи заменены иконками
     assert not bad, bad
+
+
+SYN = os.path.join(os.path.dirname(__file__), "..", "qa", "samples", "source_synthetic.pdf")
+
+
+@pytest.mark.skipif(not os.path.exists(JOB2B), reason="нет job2")
+def test_fragment_screen_flow(win, tmp_path):
+    """«Вырезать и перенести»: подпись из акта job2 + печать из синтетического образца в расписку job2."""
+    import pymupdf
+    from app.core.pdfutil import NRect
+    f = win.fragment
+    win.show_screen(f)
+    assert f.step_index() == 0
+    f.open_src(JOB2B)
+    f.open_dst(JOB2A)
+    f.cb_mode.setCurrentIndex(f.cb_mode.findData("blue"))
+    f.view_src.set_nrect(NRect(0.0665, 0.729, 0.671, 0.792))
+    f.recut()
+    assert f.cur_rgba is not None and (f.cur_rgba[..., 3] > 100).sum() > 500
+    d = f.view_dst.get_nrect()
+    assert d is not None and 0 <= d.x0 < d.x1 <= 1
+    f.place_current()
+    assert len(f.placed) == 1 and f.step_index() == 2
+    f.open_src(SYN)
+    f.cb_mode.setCurrentIndex(f.cb_mode.findData("color"))
+    f.view_src.set_nrect(NRect(0.445, 0.582, 0.675, 0.738))
+    f.recut()
+    f.view_dst.set_nrect(NRect(0.55, 0.70, 0.75, 0.84), f.view_dst.boxes["main"].pixmap)
+    f.commit("место")
+    f.undo_stack.undo()
+    f.undo_stack.redo()
+    out = str(tmp_path / "frag.pdf")
+    f.save(out)
+    assert f.step_index() == 3
+    before = pymupdf.open(JOB2A)
+    after = pymupdf.open(out)
+    assert len(after) == len(before)
+    assert len(after[0].get_images()) > len(before[0].get_images())
+    # исходники не тронуты
+    with pytest.raises(Exception):
+        f.save(JOB2A)
+        raise RuntimeError("save over input must be refused")
+
+
+def test_fragment_needs_files(win):
+    f = win.fragment
+    n = len(win._toasts)
+    f.save("/tmp/never.pdf")          # нечего сохранять — понятное уведомление, без падения
+    assert len(win._toasts) == n + 1

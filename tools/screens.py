@@ -23,7 +23,7 @@ app = QApplication(sys.argv)
 from app.main import setup_app  # noqa: E402
 from app.ui.infra import settings  # noqa: E402
 settings().clear()
-for k in ("sign", "batch", "sort", "image", "pages"):
+for k in ("sign", "batch", "fragment", "sort", "image", "pages"):
     settings().setValue(f"tour/{k}", True)   # не показывать предложение подсказки на скриншотах
 setup_app(app)
 W, H = (int(x) for x in os.environ.get("SCREEN_SIZE", "1366x768").split("x"))
@@ -108,6 +108,24 @@ shot("5_paket.png")
 w.batch._summary.grab().save(os.path.join(OUT, P + "5b_paket_itog.png"))
 w.batch._summary.close()
 
+w.show_screen(w.fragment)
+from app.core.pdfutil import NRect  # noqa: E402
+fr = w.fragment
+fr.open_src(os.path.join(os.path.dirname(__file__), "..", "qa", "samples", "source_synthetic.pdf"))
+fr.open_dst(f"{D}/job2/fileA_3.0MB.pdf")
+fr.cb_mode.setCurrentIndex(fr.cb_mode.findData("color"))
+fr.view_src.set_nrect(NRect(0.445, 0.582, 0.675, 0.738))
+fr.recut()
+fr.view_dst.set_nrect(NRect(0.55, 0.62, 0.78, 0.78), fr.view_dst.boxes["main"].pixmap)
+fr.commit("место")
+fr.place_current()
+shot("10_fragment.png")
+fr.save(os.path.join(tmp, "fragment.pdf"))
+tour = w.start_tour()
+tour.go(2)
+shot("10_tour_fragment_3.png")
+tour.close_tour()
+
 # пошаговые подсказки
 w.show_screen(w.sign)
 tour = w.start_tour()
@@ -132,3 +150,6 @@ shot("9_temnaya_tema.png")
 w.toggle_theme()
 print(w.batch.summary_text(w.batch.last_results))
 print("ok", sorted(os.listdir(tmp)))
+if os.environ.get("SCREEN_KEEP"):
+    import shutil
+    shutil.copytree(tmp, os.environ["SCREEN_KEEP"], dirs_exist_ok=True)

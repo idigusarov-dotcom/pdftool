@@ -38,6 +38,9 @@ def blue_ink_alpha(rgb: np.ndarray, sat_min: float = 14, hue_lo: float = 92, hue
 
 
 INK_MODES = {"blue": "синяя", "black": "чёрная", "any": "любая"}
+# для «Вырезать и перенести»: ещё цветная печать и «без удаления фона»
+FRAGMENT_MODES = {"blue": "синие чернила", "black": "чёрные чернила / карандаш", "color": "цветная печать (штамп)",
+                  "any": "всё, кроме белого фона", "none": "без удаления фона (как есть)"}
 
 
 def _remove_long_lines(mask: np.ndarray, min_len: int) -> np.ndarray:
@@ -63,6 +66,11 @@ def ink_alpha(rgb: np.ndarray, mode: str = "blue", sensitivity: float = 0.5) -> 
     sens = float(np.clip(sensitivity, 0, 1))
     if mode == "blue":
         return blue_ink_alpha(rgb, sat_min=26 - 24 * sens)  # 0.5 → 14, как в job2
+    if mode == "color":   # любой цветной оттенок (синий, фиолетовый, красный штамп); чёрный текст не берём
+        hsv = _rgb_to_hsv_cv(rgb)
+        smin = 40 - 30 * sens
+        return (np.clip((hsv[..., 1] - smin) / 40.0, 0, 1) * np.clip((252 - hsv[..., 2]) / 30.0, 0, 1)).astype(
+            np.float32)
     gray = rgb.astype(np.float32).mean(-1)
     thr = 120 + 110 * sens          # порог яркости
     a = np.clip((thr - gray) / 40.0, 0, 1)
@@ -77,6 +85,8 @@ def ink_alpha(rgb: np.ndarray, mode: str = "blue", sensitivity: float = 0.5) -> 
         from PIL import ImageFilter
         lines = np.asarray(Image.fromarray((lines * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(3))) > 0
         a = a * ~lines
+    if mode == "any":   # тёмное ИЛИ цветное: светлые цветные оттиски печати не теряются
+        a = np.maximum(a, ink_alpha(rgb, "color", sensitivity))
     return a.astype(np.float32)
 
 
@@ -106,8 +116,16 @@ def extract_ink(rgb: np.ndarray, color=DEFAULT_INK_RGB, uniform: bool = True,
     if uniform:
         col = np.broadcast_to(np.array(color, np.uint8), a.shape + (3,))
     else:
-        col = rgb
+        col = unblend_white(rgb, a)
     return np.dstack([col, (a * 255).astype(np.uint8)]).astype(np.uint8)
+
+
+def unblend_white(rgb: np.ndarray, alpha: np.ndarray) -> np.ndarray:
+    """Настоящий цвет чернил: пиксель скана = a*цвет + (1-a)*белый  ->  цвет = 255 - (255 - пиксель)/a.
+    Без этого края подписи/печати в режиме «сохранить цвет» получаются бледными с белым ореолом."""
+    a = np.clip(alpha.astype(np.float32), 1e-3, 1)[..., None]
+    c = 255 - (255 - rgb.astype(np.float32)) / a
+    return np.clip(c, 0, 255).astype(np.uint8)
 
 
 def has_ink(rgba: np.ndarray, min_pixels: int = 30) -> bool:

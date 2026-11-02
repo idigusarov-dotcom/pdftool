@@ -314,6 +314,14 @@ class PageView(QGraphicsView):
                 and (act is None or act.pixmap is None):
             self._drag_start = self.mapToScene(e.position().toPoint())
             return
+        if self.page_item and e.button() == Qt.LeftButton and item is self.page_item and act is not None \
+                and act.pixmap is not None:
+            # щелчок по пустому месту страницы — картинка переезжает туда (центром)
+            p = self.mapToScene(e.position().toPoint())
+            r = act.rect()
+            act.setPos(p.x() - r.width() / 2, p.y() - r.height() / 2)
+            self.rectChanged.emit(self.active)
+            return
         super().mousePressEvent(e)
 
     def mouseMoveEvent(self, e):

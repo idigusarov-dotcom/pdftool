@@ -17,6 +17,7 @@ from .ui.chrome import Collapsible, DropZone, Toast, pdf_paths
 from .ui.helppage import HelpPage
 from .ui.infra import settings
 from .ui.tab_batch import BatchTab
+from .ui.tab_fragment import FragmentTab
 from .ui.tour import TourOverlay
 from .ui.tab_image import ImageTab
 from .ui.tab_pages import PagesTab
@@ -26,6 +27,7 @@ from .ui.tab_sort import SortTab
 
 SCREENS = [("sign", "Подписи", "pen-tool", "Перенос подписей из актов в расписки"),
            ("batch", "Пакет", "layers", "Много пар файлов за один раз"),
+           ("fragment", "Фрагменты", "scissors", "Вырезать подпись/печать из одного PDF и поставить в другой"),
            ("sort", "Сортировка", "list-ordered", "Разложить страницы по номерам квартир"),
            ("image", "Картинка", "image", "Поставить печать или подпись-картинку"),
            ("pages", "Страницы", "files", "Объединить, повернуть, удалить, разделить"),
@@ -69,10 +71,12 @@ class MainWindow(QMainWindow):
         self.sort = SortTab()
         self.image = ImageTab()
         self.pages = PagesTab()
+        self.fragment = FragmentTab()
         self.batch = BatchTab(self.sign, lambda: self.show_screen(self.sign))
         for bar in (self.sign.tbar, self.sort.tbar):
             bar.changed.connect(self.templates_changed)
-        self.helppage = HelpPage([("Подписи", self.sign), ("Пакет", self.batch), ("Сортировка", self.sort),
+        self.helppage = HelpPage([("Подписи", self.sign), ("Пакет", self.batch),
+                                  ("Фрагменты (вырезать и перенести)", self.fragment), ("Сортировка", self.sort),
                                   ("Картинка", self.image), ("Страницы", self.pages)], self.start_tour)
 
         root = QWidget()
@@ -183,7 +187,7 @@ class MainWindow(QMainWindow):
             self.addAction(a)
 
     def all_tabs(self):
-        return [self.sign, self.batch, self.sort, self.image, self.pages]
+        return [self.sign, self.batch, self.fragment, self.sort, self.image, self.pages]
 
     def show_screen(self, w):
         self.tabs.setCurrentWidget(w)
@@ -315,7 +319,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         names = {self.sign: "Подписи", self.batch: "Пакет", self.sort: "Сортировка", self.image: "Картинка",
-                 self.pages: "Страницы"}
+                 self.pages: "Страницы", self.fragment: "Фрагменты"}
         dirty = [names[t] for t in self.all_tabs() if t.is_dirty()]
         if dirty:
             ans = QMessageBox.question(
