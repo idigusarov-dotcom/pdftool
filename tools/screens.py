@@ -5,6 +5,8 @@ os.environ["PDFTOOL_SETTINGS"] = "PdfToolTest"
 import sys
 import tempfile
 
+os.environ["PDFTOOL_TEMPLATES"] = tempfile.mkdtemp(prefix="pdftool_scr_tpl_")
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
@@ -40,10 +42,11 @@ w.sign.set_mapping([3, 4, 7, 6, None, 0, 2])
 w.sign.table.setCurrentCell(0, 2)
 w.sign.show_row(0)
 w.sign.update_ink_preview()
+w.sign.tbar.save("Акт ЦО (Кржижановского)")
 shot("1_podpisi.png")
 w.sign.save(os.path.join(tmp, "sign.pdf"))
 
-w.tabs.setCurrentIndex(1)
+w.tabs.setCurrentWidget(w.sort)
 w.sort.open(f"{D}/job3/input.pdf")
 w.sort.recognize()
 import time  # noqa: E402
@@ -58,14 +61,14 @@ w.sort.table.setCurrentCell(0, 1)
 shot("2_sortirovka.png")
 w.sort.save(os.path.join(tmp, "sorted.pdf"))
 
-w.tabs.setCurrentIndex(2)
+w.tabs.setCurrentWidget(w.image)
 w.image.open_pdf(f"{D}/job2/fileA_3.0MB.pdf")
 w.image.open_image(f"{D}/job2/c4_v.png")
 w.image.chk_white.setChecked(True)
 shot("3_kartinka.png")
 w.image.save(os.path.join(tmp, "img.pdf"))
 
-w.tabs.setCurrentIndex(3)
+w.tabs.setCurrentWidget(w.pages)
 w.pages.add_files([f"{D}/job2/fileA_3.0MB.pdf", f"{D}/job2/fileB_3.5MB.pdf"])
 w.pages.open(f"{D}/job2/fileB_3.5MB.pdf")
 w.pages.grid.item(1).setSelected(True)
@@ -73,4 +76,24 @@ w.pages.rotate(90)
 shot("4_stranicy.png")
 w.pages.save(os.path.join(tmp, "pages.pdf"))
 w.pages.do_merge(os.path.join(tmp, "merged.pdf"))
+
+w.tabs.setCurrentWidget(w.batch)
+w.batch.add_pair(f"{D}/job2/fileB_3.5MB.pdf", f"{D}/job2/fileA_3.0MB.pdf", "Акт ЦО (Кржижановского)",
+                 os.path.join(tmp, "пакет_1.pdf"))
+w.batch.add_pair(f"{D}/job2/fileB_3.5MB.pdf", f"{D}/job2/fileA_3.0MB.pdf", None, os.path.join(tmp, "пакет_2.pdf"))
+w.batch.items[0].mapping = [3, 4, 7, 6, None, 0, 2]
+w.batch.fill()
+w.batch.run_all()
+from PySide6.QtCore import QThreadPool  # noqa: E402
+t0 = time.time()
+while not w.batch.last_results and time.time() - t0 < 120:
+    app.processEvents()
+    QThreadPool.globalInstance().waitForDone(50)
+for _ in range(20):
+    app.processEvents()
+    time.sleep(0.03)
+w.batch._summary.move(w.geometry().center() - w.batch._summary.rect().center())
+shot("5_paket.png")
+w.batch._summary.grab().save(os.path.join(OUT, "5b_paket_itog.png"))
+print(w.batch.summary_text(w.batch.last_results))
 print("ok", sorted(os.listdir(tmp)))

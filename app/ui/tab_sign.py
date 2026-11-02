@@ -11,11 +11,13 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..core import numbers
+from ..core import templates as tp
 from ..core import signatures as sig
 from ..core.ink import INK_MODES
 from ..core.logsetup import log
 from ..core.pdfutil import NRect, safe_output_path
 from .infra import UndoMixin, load_rect, run_task, save_rect, settings
+from .templbar import TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
 from .widgets import (PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar)
 
@@ -60,6 +62,10 @@ class SignTab(QWidget, UndoMixin):
         top.addStretch()
         top.addWidget(big_button("🔢 Распознать номера и сопоставить", self.recognize))
         lay.addLayout(top)
+        self.tbar = TemplateBar(self.capture_template)
+        self.tbar.applied.connect(self.apply_template)
+        lay.addWidget(self.tbar)
+        self.page_tpl: dict = {"act": {}, "rec": {}}
 
         split = QSplitter(Qt.Horizontal)
         self.table = QTableWidget(0, 5)
@@ -167,6 +173,7 @@ class SignTab(QWidget, UndoMixin):
             self.acts_path, self.acts = path, pymupdf.open(path)
             self.lbl_acts.setText(f"{os.path.basename(path)} ({len(self.acts)} стр.)")
             self.nums_act = []
+            self.page_tpl = {"act": {}, "rec": {}}
             self.rebuild()
 
     def open_receipts(self, path: str = ""):
@@ -175,6 +182,7 @@ class SignTab(QWidget, UndoMixin):
             self.rec_path, self.rec = path, pymupdf.open(path)
             self.lbl_rec.setText(f"{os.path.basename(path)} ({len(self.rec)} стр.)")
             self.nums_rec = []
+            self.page_tpl = {"act": {}, "rec": {}}
             self.rebuild()
 
     def rebuild(self):
@@ -249,6 +257,10 @@ class SignTab(QWidget, UndoMixin):
             an = self.nums_act[m].text if (m is not None and m < len(self.nums_act)) else ""
             self.table.item(r, C_RNUM).setText(rn)
             self.table.item(r, C_ANUM).setText(an)
+            ta = self.page_tpl["act"].get(m) if m is not None else None
+            tr = self.page_tpl["rec"].get(r)
+            self.table.item(r, C_ANUM).setToolTip(f"Бланк акта: {ta or 'не узнан'}")
+            self.table.item(r, C_RNUM).setToolTip(f"Бланк расписки: {tr or 'не узнан'}")
             c = self.conf[r]
             self.table.item(r, C_CONF).setText("" if c is None else f"{int(round(c * 100))}%")
             color = QColor("white")
@@ -266,19 +278,25 @@ class SignTab(QWidget, UndoMixin):
         mode = "blue" if self.job.ink_mode == "blue" else "any"
         za, zr = [self.zone_act], [self.zone_rec]
         ap, rp = self.acts_path, self.rec_path
+        temps = self.tbar.auto_templates()
         dlg = QProgressDialog("Распознаю номера квартир…", "Отмена", 0, 100, self)
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
         n_a, n_r = len(self.acts), len(self.rec)
 
         def work(progress):
-            ra = numbers.read_document(rp, zr, mode, progress=lambda i, n: progress(i, n_a + n_r))
-            aa = numbers.read_document(ap, za, mode, progress=lambda i, n: progress(n_r + i, n_a + n_r))
-            return ra, aa
+            dr, da = [], []
+            ra = numbers.read_document(rp, zr, mode, progress=lambda i, n: progress(i, n_a + n_r),
+                                       temps=temps, role="rec", detected=dr)
+            aa = numbers.read_document(ap, za, mode, progress=lambda i, n: progress(n_r + i, n_a + n_r),
+                                       temps=temps, role="act", detected=da)
+            names = {"rec": {i: d.template.name for i, d in enumerate(dr) if d.template},
+                     "act": {i: d.template.name for i, d in enumerate(da) if d.template}}
+            return ra, aa, names
 
         def done(res):
             dlg.close()
-            self.nums_rec, self.nums_act = res
+            self.nums_rec, self.nums_act, self.page_tpl = res
             mapping, conf = numbers.auto_match(self.nums_rec, self.nums_act)
             self._loading = True
             for r, m in enumerate(mapping):
@@ -286,6 +304,8 @@ class SignTab(QWidget, UndoMixin):
                 self.table.cellWidget(r, C_ACT).setCurrentIndex(0 if m is None else m + 1)
             self._loading = False
             self.conf = [c if m is not None else 0.0 for m, c in zip(mapping, conf)]
+            if temps:   # рамки подписи — из шаблона, узнанного на каждой странице
+                tp.apply_detected_frames(self.job, temps)
             self.refresh_marks()
             self.show_row(self.table.currentRow())
             self.commit("автосопоставление")
@@ -300,6 +320,64 @@ class SignTab(QWidget, UndoMixin):
 
         t = run_task(work, done, fail, lambda i, n: dlg.setValue(int(100 * i / max(n, 1))))
         dlg.canceled.connect(lambda: setattr(t, "cancelled", True))
+
+    # ---------- шаблоны ----------
+    def capture_template(self, name: str) -> tp.Template:
+        j = self.job
+        t = tp.Template(name, src_rect=j.src_rect if j else load_rect("sign/src", sig.DEFAULT_SRC_RECT),
+                        dst_rect=j.dst_rect if j else load_rect("sign/dst", sig.DEFAULT_DST_RECT),
+                        zones_act=[self.zone_act], zones_rec=[self.zone_rec],
+                        ink_mode=self.cb_mode.currentData(), sensitivity=self.sl_sens.value() / 100)
+        r, a = self.current()
+        if self.acts is not None:
+            t.fp_act = tp.fingerprint(self.acts, a if a is not None else 0)
+        if self.rec is not None:
+            t.fp_rec = tp.fingerprint(self.rec, r if r is not None and r >= 0 else 0)
+        return t
+
+    def apply_template(self, t: tp.Template):
+        if t.zones_act:
+            self.zone_act = t.zones_act[0]
+            save_rect("sign/zone_act", self.zone_act)
+        if t.zones_rec:
+            self.zone_rec = t.zones_rec[0]
+            save_rect("sign/zone_rec", self.zone_rec)
+        save_rect("sign/src", t.src_rect)
+        save_rect("sign/dst", t.dst_rect)
+        self._loading = True
+        self.cb_mode.setCurrentIndex(max(0, self.cb_mode.findData(t.ink_mode)))
+        self.sl_sens.setValue(int(round(t.sensitivity * 100)))
+        self._loading = False
+        if self.job:
+            self.job.src_rect = t.src_rect or self.job.src_rect
+            self.job.dst_rect = t.dst_rect or self.job.dst_rect
+            self.job.ink_mode, self.job.sensitivity = t.ink_mode, t.sensitivity
+            self.show_row(self.table.currentRow())
+            self.commit("шаблон «%s»" % t.name)
+
+    # ---------- для пакетного режима ----------
+    def load_pair(self, acts: str, receipts: str, template: str | None = None, mapping=None,
+                  src_overrides=None, dst_overrides=None):
+        self.open_acts(acts)
+        self.open_receipts(receipts)
+        if template:
+            self.tbar.reload(template)
+            t = tp.get(template)
+            if t:
+                self.apply_template(t)
+        if self.job and mapping is not None:
+            self.set_mapping(list(mapping))
+            self.job.src_overrides = dict(src_overrides or {})
+            self.job.dst_overrides = dict(dst_overrides or {})
+            self.show_row(self.table.currentRow())
+        self.reset_undo()
+
+    def export_pair(self) -> dict | None:
+        if not self.job:
+            return None
+        return dict(acts=self.acts_path, receipts=self.rec_path, mapping=list(self.job.mapping),
+                    src_overrides=dict(self.job.src_overrides), dst_overrides=dict(self.job.dst_overrides),
+                    template=self.tbar.current_name())
 
     # ---------- рамки ----------
     def current(self):

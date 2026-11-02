@@ -15,15 +15,26 @@ OCR_DPI = 150
 
 def read_document(path: str, zones: Sequence[NRect], mode: str = "blue", sensitivity: float = 0.5,
                   progress: Callable[[int, int], bool | None] | None = None,
-                  pages: Optional[Sequence[int]] = None) -> list[DigitResult]:
-    """Читает номер на каждой странице. progress(i, n) может вернуть False — отмена."""
+                  pages: Optional[Sequence[int]] = None, temps: Sequence = (), role: str = "act",
+                  detected: Optional[list] = None) -> list[DigitResult]:
+    """Читает номер на каждой странице. progress(i, n) может вернуть False — отмена.
+    temps — шаблоны: для каждой страницы определяется бланк, его зоны сдвигаются по бланку.
+    detected — сюда кладётся результат определения шаблона по каждой странице."""
+    from . import templates as tp
     out: list[DigitResult] = []
     with pymupdf.open(path) as doc:
         idx = list(pages) if pages is not None else list(range(len(doc)))
         for k, i in enumerate(idx):
             if progress and progress(k, len(idx)) is False:
                 break
-            out.append(read_best(render_page(doc, i, OCR_DPI), zones, mode, sensitivity))
+            img = render_page(doc, i, OCR_DPI)
+            zs = list(zones)
+            if temps:
+                det = tp.detect(tp.page_profile(img), temps, role)
+                if detected is not None:
+                    detected.append(det)
+                zs = det.zones(role) + [z for z in zs if z not in det.zones(role)] if det.template else zs
+            out.append(read_best(img, zs, mode, sensitivity))
     return out
 
 

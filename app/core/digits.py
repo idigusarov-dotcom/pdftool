@@ -1,7 +1,7 @@
 """Распознавание рукописных цифр номера квартиры в заданной зоне.
 
-Лёгкая сверточная сеть MNIST (ONNX Model Zoo, mnist-12, лицензия MIT/Apache),
-веса перенесены в numpy (models/digits_mnist.npz, ~25 КБ) — без onnxruntime/torch.
+Небольшая свёрточная сеть (обучена на MNIST + аугментации + реальных цифрах из сканов),
+веса в numpy (models/digits_cnn.npz, ~0,6 МБ) — без onnxruntime/torch.
 """
 from __future__ import annotations
 
@@ -17,6 +17,8 @@ from .ink import ink_alpha
 
 
 def _model_path() -> str:
+    if os.environ.get("PDFTOOL_DIGITS_MODEL"):   # для проверки точности на отложенной модели
+        return os.environ["PDFTOOL_DIGITS_MODEL"]
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     p = os.path.join(base, "models", "digits_cnn.npz")
     if not os.path.exists(p):

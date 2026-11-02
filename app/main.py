@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTabWidget
 
 from . import APP_NAME, __version__
 from .core.logsetup import log, log_dir, setup_logging
+from .ui.tab_batch import BatchTab
 from .ui.tab_image import ImageTab
 from .ui.tab_pages import PagesTab
 from .ui.tab_sign import SignTab
@@ -28,7 +29,11 @@ class MainWindow(QMainWindow):
         self.sort = SortTab()
         self.image = ImageTab()
         self.pages = PagesTab()
+        self.batch = BatchTab(self.sign, lambda: self.tabs.setCurrentWidget(self.sign))
+        for bar in (self.sign.tbar, self.sort.tbar):
+            bar.changed.connect(self.templates_changed)
         self.tabs.addTab(self.sign, "✍ Перенос подписей")
+        self.tabs.addTab(self.batch, "📦 Пакет подписей")
         self.tabs.addTab(self.sort, "🔢 Сортировка по квартирам")
         self.tabs.addTab(self.image, "🖼 Вставка картинки")
         self.tabs.addTab(self.pages, "📑 Страницы")
@@ -36,7 +41,12 @@ class MainWindow(QMainWindow):
         self._menus()
 
     def all_tabs(self):
-        return [self.sign, self.sort, self.image, self.pages]
+        return [self.sign, self.batch, self.sort, self.image, self.pages]
+
+    def templates_changed(self):
+        for bar in (self.sign.tbar, self.sort.tbar):
+            bar.reload()
+        self.batch.refresh_templates()
 
     def _menus(self):
         m = self.menuBar().addMenu("Правка")

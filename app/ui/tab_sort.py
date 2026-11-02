@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QProgressDialo
 from ..core import numbers, sorting
 from ..core.logsetup import log
 from ..core.pdfutil import NRect, safe_output_path
-from .infra import UndoMixin, load_rect, run_task, save_rect
+from .infra import UndoMixin, load_rect, run_task, save_rect, settings
+from .templbar import TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
 from .widgets import PageView, ask_open_pdf, ask_save, big_button, error, info, zoom_bar
 
@@ -32,6 +33,7 @@ class SortTab(QWidget, UndoMixin):
         self.loader: ThumbLoader | None = None
         self.unsure: set[int] = set()   # страницы с неуверенным распознаванием
         self._icons: dict[int, QIcon] = {}
+        self.tpl_names: dict[int, str] = {}
         self.zones = {"zone": load_rect("sort/zone1", DEFAULT_ZONE), "zone2": load_rect("sort/zone2", None)}
         lay = QVBoxLayout(self)
         h = QLabel(HELP)
@@ -46,6 +48,9 @@ class SortTab(QWidget, UndoMixin):
         top.addWidget(big_button("🔎 Из текста PDF", self.guess))
         top.addWidget(big_button("↕ Упорядочить таблицу", self.sort_table))
         lay.addLayout(top)
+        self.tbar = TemplateBar(self.capture_template)
+        self.tbar.applied.connect(self.apply_template)
+        lay.addWidget(self.tbar)
 
         split = QSplitter(Qt.Horizontal)
         self.table = QTableWidget(0, 3)
@@ -111,6 +116,7 @@ class SortTab(QWidget, UndoMixin):
         self.path, self.doc = path, pymupdf.open(path)
         self.lbl.setText(f"{os.path.basename(path)} ({len(self.doc)} стр.)")
         self.unsure = set()
+        self.tpl_names = {}
         self._icons = {}
         if self.loader:
             self.loader.stop()
@@ -192,6 +198,35 @@ class SortTab(QWidget, UndoMixin):
             self.zones[key] = nr
             save_rect("sort/zone1" if key == "zone" else "sort/zone2", nr)
 
+    # ---------- шаблоны ----------
+    def capture_template(self, name: str):
+        from ..core import templates as tp
+        zs = [z for z in (self.zones["zone"], self.zones["zone2"]) if z is not None]
+        old = tp.get(name)   # рамки подписи из шаблона вкладки «Подписи» сохраняем
+        t = tp.Template(name, zones_rec=zs, src_rect=old.src_rect if old else None,
+                        dst_rect=old.dst_rect if old else None, zones_act=old.zones_act if old else [],
+                        fp_act=old.fp_act if old else None,
+                        ink_mode=old.ink_mode if old else "blue", sensitivity=old.sensitivity if old else 0.5)
+        if self.doc is not None:
+            r = self.table.currentRow()
+            p = self.table.item(r, 0).data(Qt.UserRole) if r >= 0 else 0
+            t.fp_rec = tp.fingerprint(self.doc, p)
+        return t
+
+    def apply_template(self, t):
+        if not t.zones_rec:
+            return
+        self.zones["zone"] = t.zones_rec[0]
+        self.zones["zone2"] = t.zones_rec[1] if len(t.zones_rec) > 1 else None
+        save_rect("sort/zone1", self.zones["zone"])
+        if self.zones["zone2"]:
+            save_rect("sort/zone2", self.zones["zone2"])
+        else:
+            settings().remove("sort/zone2")
+        self.view.remove_box("zone")
+        self.view.remove_box("zone2")
+        self.show_page(self.table.currentRow())
+
     def clear_zone2(self):
         self.zones["zone2"] = None
         self.view.remove_box("zone2")
@@ -210,6 +245,8 @@ class SortTab(QWidget, UndoMixin):
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumDuration(0)
         path = self.path
+        temps = self.tbar.auto_templates()
+        det: list = []
 
         def done(res):
             dlg.close()
@@ -221,6 +258,8 @@ class SortTab(QWidget, UndoMixin):
                     got += 1
                     if not r.ok:
                         self.unsure.add(p)
+            for p, d in zip(todo, det):
+                self.tpl_names[p] = d.template.name if d.template else ""
             self.set_values(vals)
             info(self, f"Распознано: {got} из {len(todo)} пустых.\nНеуверенных (оранжевые): "
                        f"{len([p for p in todo if p in self.unsure])}.\nРукописные цифры распознаются неточно — "
@@ -230,7 +269,8 @@ class SortTab(QWidget, UndoMixin):
             dlg.close()
             error(self, "Не удалось распознать: " + msg)
 
-        t = run_task(lambda prog: numbers.read_document(path, zones, "blue", progress=prog, pages=todo), done, fail,
+        t = run_task(lambda prog: numbers.read_document(path, zones, "blue", progress=prog, pages=todo,
+                                                           temps=temps, role="rec", detected=det), done, fail,
                      lambda i, n: dlg.setValue(int(100 * i / max(n, 1))))
         dlg.canceled.connect(lambda: setattr(t, "cancelled", True))
 
@@ -252,6 +292,8 @@ class SortTab(QWidget, UndoMixin):
                 note, color = "проверьте (распознано неуверенно)", QColor("#ffcc80")
             for c in (1, 2):
                 self.table.item(r, c).setBackground(color)
+            if self.tpl_names.get(p):
+                note = (note + "  " if note else "") + f"[бланк: {self.tpl_names[p]}]"
             self.table.item(r, 2).setText(note)
         self.table.blockSignals(False)
         empty = sum(1 for v in vals if not v)
