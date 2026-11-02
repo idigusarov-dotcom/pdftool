@@ -144,3 +144,130 @@ def test_template_bar_and_batch_ui(win, tmp_path):
     assert "Обработано пар: 2 из 2" in b.summary_text(b.last_results)
     assert os.path.exists(tmp_path / "p1.pdf") and os.path.exists(tmp_path / "p2.pdf")
     b._summary.close()
+
+
+# ---------- v1.3: интерфейс и пошаговые подсказки ----------
+def _screens(win):
+    return [win.sign, win.batch, win.sort, win.image, win.pages, win.helppage]
+
+
+def test_tours_reference_real_widgets_and_run(win):
+    from PySide6.QtCore import QRect
+    from PySide6.QtWidgets import QWidget
+    from app.ui.tour import TourOverlay
+    win.resize(1366, 768)
+    for scr in _screens(win):
+        win.show_screen(scr)
+        app.processEvents()
+        steps = scr.tour_steps()
+        assert len(steps) >= (1 if scr is win.helppage else 6), scr
+        for st in steps:
+            assert st.title and st.text
+            if st.target is not None:
+                assert isinstance(st.target, QWidget)
+                assert scr.isAncestorOf(st.target), (scr, st.title)   # элемент на этом же экране
+        tour = win.start_tour()
+        assert isinstance(tour, TourOverlay)
+        for i in range(len(tour.steps)):
+            tour.go(i)
+            app.processEvents()
+            st = tour.steps[i]
+            if st.target is not None:
+                assert st.target.isVisible(), (scr, st.title)          # «Дополнительно» раскрывается само
+                assert not tour.target_rect().isNull()
+            assert QRect(0, 0, tour.width(), tour.height()).contains(tour.bubble.geometry()), (scr, st.title)
+            assert tour.count.text() == f"Шаг {i + 1} из {len(tour.steps)}"
+        tour.next()                       # «Готово» на последнем шаге закрывает
+        app.processEvents()
+        assert win.tour is None
+    # «Дополнительно» после подсказки снова свёрнуто
+    assert not win.sign.advanced.is_expanded()
+
+
+def test_tour_keys_and_header_button(win):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    win.show_screen(win.sort)
+    win.btn_help.click()
+    t = win.tour
+    assert t is not None and t.i == 0
+    QTest.keyClick(t, Qt.Key_Right)
+    assert t.i == 1
+    QTest.keyClick(t, Qt.Key_Left)
+    assert t.i == 0
+    QTest.keyClick(t, Qt.Key_Escape)
+    app.processEvents()
+    assert win.tour is None
+    win.sort.header.help.click()          # «Как пользоваться» на экране
+    assert win.tour is not None
+    win.tour.close_tour()
+
+
+def test_first_visit_offer_once(win):
+    from app.ui.infra import settings
+    win._toasts.clear()
+    win.offer_tour("image")               # экран не текущий — только помечаем
+    assert settings().value("tour/image", False, type=bool)
+    win.show_screen(win.pages)
+    n = len(win._toasts)
+    win.offer_tour("pages")
+    assert len(win._toasts) == n + 1 and "Показать" in [b.text() for b in win._toasts[-1].findChildren(
+        __import__("PySide6.QtWidgets", fromlist=["QPushButton"]).QPushButton)]
+    win.offer_tour("pages")               # второй раз не предлагаем
+    assert len(win._toasts) == n + 1
+
+
+def test_steps_toast_dropzone_theme(win, tmp_path):
+    from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PySide6.QtGui import QDropEvent
+    from app.ui import style
+    from app.ui.widgets import info
+    s = win.sign
+    assert s.header.steps.state(0) == "active"
+    # перетаскивание файлов на зоны
+    for dz, path in ((s.dz_acts, JOB2B), (s.dz_rec, JOB2A)):
+        md = QMimeData()
+        md.setUrls([QUrl.fromLocalFile(path)])
+        ev = QDropEvent(QPointF(5, 5), Qt.CopyAction, md, Qt.LeftButton, Qt.NoModifier)
+        dz.dropEvent(ev)
+    assert s.acts is not None and s.rec is not None
+    win.refresh_steps()
+    assert s.header.steps.state(0) == "done" and s.header.steps.state(1) == "active"
+    s.save(str(tmp_path / "x.pdf"))
+    win.refresh_steps()
+    assert [s.header.steps.state(i) for i in range(3)] == ["done"] * 3
+    assert any("Готово" in t.label.text() for t in win._toasts)        # уведомление вместо окна
+    n = len(win._toasts)
+    info(s, "проверка")
+    assert len(win._toasts) == n + 1
+    win._toasts[-1].close_now()
+    # перетаскивание на окно уходит текущему экрану
+    win.show_screen(win.pages)
+    md = QMimeData()
+    md.setUrls([QUrl.fromLocalFile(JOB2A), QUrl.fromLocalFile(JOB2B)])
+    win.dropEvent(QDropEvent(QPointF(5, 5), Qt.CopyAction, md, Qt.LeftButton, Qt.NoModifier))
+    assert win.pages.merge_list.count() == 2
+    # тема
+    dark0 = style.is_dark()
+    win.toggle_theme()
+    assert style.is_dark() != dark0
+    win.toggle_theme()
+    assert style.is_dark() == dark0
+
+
+def test_buttons_have_tooltips_and_no_emoji(win):
+    from PySide6.QtWidgets import QAbstractButton
+    bad = []
+    for scr in _screens(win):
+        for b in scr.findChildren(QAbstractButton):
+            if b.metaObject().className() in ("QRadioButton", "QCheckBox") and not b.toolTip():
+                continue
+            if not b.toolTip() and b.text() not in ("Отмена",):
+                if b.parent() and b.parent().metaObject().className() in ("QTableWidget",):
+                    continue
+                if not b.text() and not b.icon().isNull():
+                    bad.append((type(scr).__name__, "icon-only без подсказки"))
+                elif b.text() and b.isVisibleTo(scr):
+                    bad.append((type(scr).__name__, b.text()))
+            assert not any(ord(ch) > 0x2700 for ch in b.text()), b.text()   # эмодзи заменены иконками
+    assert not bad, bad

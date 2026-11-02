@@ -14,8 +14,10 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFileDialog
 from ..core import batch
 from ..core import templates as tp
 from ..core.pdfutil import safe_output_path
+from . import style
 from .infra import UndoMixin, remember_dir, run_task
 from .templbar import NONE
+from .chrome import DropZone, ScreenHeader
 from .widgets import ask_open_pdf, big_button, error, info
 
 HELP = ("Пакетный режим: добавьте несколько пар (файл АКТОВ + файл РАСПИСОК), выберите для каждой шаблон бланка "
@@ -36,29 +38,44 @@ class BatchTab(QWidget, UndoMixin):
         self.task = None
         self.last_results: list[dict] = []
         lay = QVBoxLayout(self)
-        h = QLabel(HELP)
-        h.setWordWrap(True)
-        lay.addWidget(h)
+        lay.setContentsMargins(24, 18, 24, 16)
+        lay.setSpacing(12)
+        self.header = ScreenHeader("Пакет подписей",
+                                   "Несколько пар «акты + расписки» обрабатываются за один раз. "
+                                   "Исходные файлы никогда не перезаписываются.",
+                                   ["Добавьте пары файлов", "Проверьте пары страниц", "Обработайте все"])
+        lay.addWidget(self.header)
         top = QHBoxLayout()
-        top.addWidget(big_button("➕ Добавить пару…", self.add_pair))
-        top.addWidget(big_button("✖ Убрать", self.remove_pair))
-        top.addWidget(big_button("✍ Проверить во вкладке «Подписи»", self.review))
-        top.addWidget(big_button("⤶ Взять сопоставление", self.take_mapping))
+        self.btn_add = big_button("➕ Добавить пару…", self.add_pair, primary=False)
+        top.addWidget(self.btn_add)
+        self.btn_remove = big_button("✖ Убрать", self.remove_pair, ghost=True)
+        top.addWidget(self.btn_remove)
+        top.addSpacing(16)
+        self.btn_review = big_button("✍ Проверить во вкладке «Подписи»", self.review,
+                                     tip="Открыть выбранную пару на экране «Подписи», чтобы проверить пары страниц")
+        top.addWidget(self.btn_review)
+        self.btn_take = big_button("⤶ Взять сопоставление", self.take_mapping)
+        top.addWidget(self.btn_take)
         top.addStretch()
         lay.addLayout(top)
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(["№", "Акты", "Расписки", "Шаблон", "Результат", "Сопоставление", "Итог"])
-        for c, w in ((C_N, 40), (C_ACTS, 220), (C_REC, 220), (C_TPL, 170), (C_OUT, 260), (C_MAP, 150)):
+        for c, w in ((C_N, 36), (C_ACTS, 150), (C_REC, 150), (C_TPL, 170), (C_OUT, 210), (C_MAP, 115)):
             self.table.setColumnWidth(c, w)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.verticalHeader().hide()
         self.table.itemChanged.connect(self.item_edited)
+        self.dz = DropZone("Добавить пару", "Перетащите сюда сразу два PDF — акты и расписки (или нажмите)",
+                           icon_name="files")
+        self.dz.clicked.connect(self.add_pair)
+        self.dz.files.connect(self.accept_files)
+        lay.addWidget(self.dz)
         lay.addWidget(self.table, 1)
         bottom = QHBoxLayout()
         self.bar = QProgressBar()
         self.bar.setFormat("%p%")
         bottom.addWidget(self.bar, 1)
-        self.btn_cancel = QPushButton("Отмена")
+        self.btn_cancel = big_button("Отмена", None, icon_name="x", tip="Остановить обработку (готовые файлы останутся)")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self.cancel)
         bottom.addWidget(self.btn_cancel)
@@ -69,6 +86,44 @@ class BatchTab(QWidget, UndoMixin):
         lay.addLayout(bottom)
         self._filling = False
         self.reset_undo()
+
+    # ---------- шаги, подсказка, перетаскивание ----------
+    def step_index(self) -> int:
+        if not self.items:
+            return 0
+        if self.last_results and getattr(self, "_ran_state", None) == self.get_state():
+            return 3
+        return 2 if any(i.mapping is not None for i in self.items) else 1
+
+    def accept_files(self, paths: list[str]):
+        pdfs = [p for p in paths if p.lower().endswith(".pdf")]
+        if len(pdfs) != 2:
+            return error(self, "Перетащите сразу два PDF: файл актов и файл расписок.")
+        # «акт» в имени — это акты; иначе первый — акты
+        a, r = pdfs
+        if "акт" in os.path.basename(r).lower() and "акт" not in os.path.basename(a).lower():
+            a, r = r, a
+        self.add_pair(a, r)
+        info(self, f"Пара добавлена: акты — {os.path.basename(a)}, расписки — {os.path.basename(r)}. "
+                   "Проверьте, что файлы не перепутаны.")
+
+    def tour_steps(self):
+        from .tour import Step
+        return [
+            Step(None, "Пакетный режим", "Когда пар «акты + расписки» много (например, по разным домам), их можно "
+                 "обработать за один раз. Нажимайте «Далее»."),
+            Step(self.btn_add, "1. Добавьте пару", "Нажмите и выберите сначала файл <b>актов</b>, потом файл "
+                 "<b>расписок</b>. Или перетащите оба файла на плашку ниже."),
+            Step(self.table, "Список пар", "Каждая строка — одна пара. В столбце «Шаблон» выберите шаблон бланка "
+                 "(если сохраняли). Путь результата можно изменить двойным щелчком."),
+            Step(self.btn_review, "2. Проверьте пары страниц", "Без проверки страницы сопоставляются по порядку. "
+                 "Нажмите — пара откроется на экране «Подписи», там поправьте таблицу и рамки…"),
+            Step(self.btn_take, "…и заберите обратно", "Вернитесь сюда и нажмите — исправления запишутся в пакет. "
+                 "В столбце «Сопоставление» появится «проверено ✓»."),
+            Step(self.btn_run, "3. Обработайте все", "Программа создаст файлы для всех пар по очереди. Можно "
+                 "остановить кнопкой «Отмена». В конце покажется итог по каждой паре."),
+            Step(self.btn_folder, "Готовые файлы", "Открывает папку, где лежат результаты."),
+        ]
 
     # ---------- Ctrl+Z ----------
     def get_state(self):
@@ -112,9 +167,9 @@ class BatchTab(QWidget, UndoMixin):
             st = self.status[r] if r < len(self.status) else ""
             si = self._ro(st)
             if st.startswith("готово") and "без подписи" not in st:
-                si.setBackground(QColor("#c8e6c9"))
+                si.setBackground(style.mark("#c8e6c9"))
             elif st:
-                si.setBackground(QColor("#ffe082") if st.startswith("готово") else QColor("#ffcdd2"))
+                si.setBackground(style.mark("#ffe082") if st.startswith("готово") else style.mark("#ffcdd2"))
             self.table.setItem(r, C_STAT, si)
         self._filling = False
 
@@ -214,6 +269,7 @@ class BatchTab(QWidget, UndoMixin):
             self.btn_run.setEnabled(True)
             self.btn_cancel.setEnabled(False)
             self.last_results = results
+            self._ran_state = self.get_state()
             for res in results:
                 self.status[res["pair"]] = self.describe(res)
             self.fill()

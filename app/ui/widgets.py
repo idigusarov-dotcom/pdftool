@@ -9,18 +9,70 @@ from PySide6.QtWidgets import (QFileDialog, QGraphicsItem, QGraphicsPixmapItem, 
 
 from ..core.pdfutil import NRect
 
-BIG_BTN = "QPushButton { font-size: 15px; padding: 8px 16px; min-height: 30px; }"
+# старые эмодзи в подписях кнопок -> иконки Lucide (эмодзи на некоторых ПК видны как квадратики)
+EMOJI_ICONS = {"📄": "file-plus", "🖼": "image", "💾": "save", "👁": "eye", "🔢": "scan-search", "🔎": "file-text",
+               "↕": "arrow-up-down", "↺": "refresh-ccw", "▶": "play", "✂": "scissors", "✍": "pen-tool",
+               "✖": "x", "➕": "plus", "➖": "x", "⟲": "rotate-ccw", "⟳": "rotate-cw", "⤶": "download",
+               "📂": "folder-open", "📋": "list-ordered", "🗑": "trash-2"}
+
+# подсказки по умолчанию для кнопок (по тексту без эмодзи)
+TIPS = {
+    "Открыть акты…": "Выбрать PDF-файл с подписанными актами (откуда берём подписи)",
+    "Открыть расписки…": "Выбрать PDF-файл с расписками (куда ставим подписи)",
+    "Открыть PDF…": "Выбрать PDF-файл с компьютера",
+    "Распознать номера и сопоставить": "Прочитать номера квартир в зелёных зонах и подобрать акт к каждой расписке",
+    "Распознать номера": "Прочитать рукописные номера квартир в зелёной зоне (заполняются только пустые ячейки)",
+    "Из текста PDF": "Найти «кв. №» в текстовом слое PDF (работает только для не-сканов)",
+    "Упорядочить таблицу": "Расставить строки по номеру квартиры",
+    "Рамки по умолчанию": "Вернуть стандартные рамки подписи для этих бланков",
+    "Предпросмотр": "Посмотреть все расписки с подписями, ничего не сохраняя",
+    "Сохранить новый PDF…": "Создать новый PDF с результатом. Исходные файлы не меняются",
+    "Сохранить отсортированный PDF…": "Создать новый PDF со страницами в порядке квартир",
+    "Сохранить список (CSV)…": "Сохранить таблицу «страница — квартира» для Excel",
+    "Выбрать картинку…": "Выбрать PNG или JPG (печать, подпись, логотип)",
+    "Добавить пару…": "Добавить в пакет файл актов и файл расписок",
+    "Убрать": "Убрать выбранную строку из списка",
+    "Проверить во вкладке «Подписи»": "Открыть выбранную пару на экране «Подписи», чтобы проверить пары страниц",
+    "Взять сопоставление": "Забрать исправленные на экране «Подписи» пары страниц обратно в пакет",
+    "Обработать все": "Создать PDF с подписями для всех пар по очереди",
+    "Открыть папку результатов": "Открыть папку, куда сохранены готовые файлы",
+    "Добавить…": "Добавить PDF-файлы для объединения",
+    "Объединить и сохранить…": "Склеить файлы списка в один новый PDF",
+    "Повернуть вправо": "Повернуть выделенные страницы по часовой стрелке",
+    "Повернуть влево": "Повернуть выделенные страницы против часовой стрелки",
+    "Удалить выбранные": "Удалить выделенные страницы (в новом файле)",
+    "Сохранить как новый PDF…": "Сохранить изменённые страницы в новый файл",
+    "По диапазонам…": "Разрезать PDF на части по введённым диапазонам",
+    "Каждая страница отдельно…": "Сохранить каждую страницу отдельным PDF",
+    "убрать зону 2": "Удалить вторую зону номера",
+}
 
 
-def big_button(text: str, slot=None, primary: bool = False) -> QPushButton:
+def big_button(text: str, slot=None, primary: bool = False, icon_name: str | None = None,
+               tip: str | None = None, ghost: bool = False) -> QPushButton:
+    from . import style
+    first, _, rest = text.partition(" ")
+    if first in EMOJI_ICONS and rest:
+        icon_name, text = icon_name or EMOJI_ICONS[first], rest
     b = QPushButton(text)
-    style = BIG_BTN
-    if primary:
-        style += "QPushButton { background: #2e7d32; color: white; font-weight: bold; }"
-    b.setStyleSheet(style)
+    b.setProperty("kind", "primary" if primary else ("ghost" if ghost else "secondary"))
+    b.setProperty("icon_name", icon_name or "")
+    if icon_name:
+        b.setIcon(style.icon(icon_name, "#ffffff" if primary else None))
+    b.setCursor(Qt.PointingHandCursor)
+    b.setToolTip(tip or TIPS.get(text, text))
     if slot:
         b.clicked.connect(slot)
     return b
+
+
+def retheme_buttons(root: QWidget):
+    """После смены темы перекрасить иконки кнопок."""
+    from . import style
+    for b in root.findChildren(QPushButton):
+        n = b.property("icon_name")
+        if n:
+            b.setIcon(style.icon(n, "#ffffff" if b.property("kind") == "primary" else None))
 
 
 def np_to_pixmap(arr: np.ndarray) -> QPixmap:
@@ -47,12 +99,35 @@ def ask_save(parent: QWidget, suggested: str, flt="PDF (*.pdf)") -> str:
     return p
 
 
-def info(parent, text):
-    QMessageBox.information(parent, "Готово", text)
+def open_folder(path: str):
+    """Открыть папку файла (или саму папку) в проводнике."""
+    import os
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+    d = path if os.path.isdir(path) else os.path.dirname(os.path.abspath(path))
+    QDesktopServices.openUrl(QUrl.fromLocalFile(d))
+
+
+def _host(parent):
+    w = parent.window() if parent is not None else None
+    return w if w is not None and hasattr(w, "toast") else None
+
+
+def info(parent, text, action=None):
+    """Сообщение без всплывающего окна: уведомление внизу справа."""
+    h = _host(parent)
+    if h is not None:
+        h.toast(text, "ok", action=action, timeout_ms=7000)
+    else:
+        QMessageBox.information(parent, "Готово", text)
 
 
 def error(parent, text):
-    QMessageBox.warning(parent, "Ошибка", text)
+    h = _host(parent)
+    if h is not None:
+        h.toast(text, "error", timeout_ms=9000)
+    else:
+        QMessageBox.warning(parent, "Ошибка", text)
 
 
 class BoxItem(QGraphicsRectItem):
@@ -125,7 +200,8 @@ class PageView(QGraphicsView):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
-        self.setBackgroundBrush(QColor("#9e9e9e"))
+        from . import style
+        self.setBackgroundBrush(QColor("#3a3f4b" if style.is_dark() else "#e6e9f0"))
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.page_item: QGraphicsPixmapItem | None = None
         self.boxes: dict[str, BoxItem] = {}
@@ -134,7 +210,7 @@ class PageView(QGraphicsView):
         self.draw_enabled = True
         self._drag_start = None
         self._auto_fit = True
-        self.setMinimumSize(300, 300)
+        self.setMinimumSize(160, 140)
 
     # совместимость: основная рамка
     @property
@@ -261,12 +337,14 @@ def zoom_bar(view: PageView):
     """Небольшая панель масштаба под просмотром страницы."""
     from PySide6.QtWidgets import QHBoxLayout, QToolButton
     lay = QHBoxLayout()
-    for text, tip, fn in (("−", "Уменьшить", view.zoom_out), ("+", "Увеличить (или Ctrl+колесо)", view.zoom_in),
-                          ("⤢", "По размеру окна", view.fit)):
+    from . import style
+    for name, tip, fn in (("zoom-out", "Уменьшить", view.zoom_out),
+                          ("zoom-in", "Увеличить (или Ctrl + колесо мыши)", view.zoom_in),
+                          ("maximize", "По размеру окна", view.fit)):
         b = QToolButton()
-        b.setText(text)
+        b.setIcon(style.icon(name))
+        b.setProperty("icon_name", name)
         b.setToolTip(tip)
-        b.setStyleSheet("font-size: 16px; min-width: 30px;")
         b.clicked.connect(fn)
         lay.addWidget(b)
     lay.addStretch()

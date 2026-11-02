@@ -13,7 +13,8 @@ from ..core.logsetup import log
 from ..core.pdfutil import NRect, safe_output_path
 from .infra import UndoMixin, last_dir, remember_dir
 from .thumbs import page_pixmap
-from .widgets import PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar
+from .chrome import DropZone, ScreenHeader
+from .widgets import open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar
 
 HELP = ("Откройте PDF и картинку (PNG/JPG). Перетащите картинку мышью, размер — синим квадратиком в углу. "
         "Масштаб — Ctrl+колесо. Выберите страницы и нажмите «Сохранить». Ctrl+Z — отменить.")
@@ -27,28 +28,43 @@ class ImageTab(QWidget, UndoMixin):
         self.path = ""
         self.img_path = ""
         self.img = None
+        self._saved = False
         lay = QVBoxLayout(self)
-        h = QLabel(HELP)
-        h.setWordWrap(True)
-        lay.addWidget(h)
+        lay.setContentsMargins(24, 18, 24, 16)
+        lay.setSpacing(12)
+        self.header = ScreenHeader("Вставка картинки",
+                                   "Печать, подпись или логотип ставится на нужные страницы PDF.",
+                                   ["Откройте PDF и картинку", "Поставьте картинку на место", "Сохраните новый PDF"])
+        lay.addWidget(self.header)
         top = QHBoxLayout()
-        top.addWidget(big_button("📄 Открыть PDF…", self.open_pdf))
-        top.addWidget(big_button("🖼 Выбрать картинку…", self.open_image))
+        top.setSpacing(12)
+        self.dz_pdf = DropZone("PDF", "Перетащите сюда PDF или нажмите")
+        self.dz_pdf.clicked.connect(self.open_pdf)
+        self.dz_pdf.files.connect(lambda ps: self.open_pdf(ps[0]))
+        self.dz_img = DropZone("Картинка", "Перетащите PNG/JPG (печать, подпись) или нажмите",
+                               exts=(".png", ".jpg", ".jpeg"), icon_name="image")
+        self.dz_img.clicked.connect(self.open_image)
+        self.dz_img.files.connect(lambda ps: self.open_image(ps[0]))
+        top.addWidget(self.dz_pdf, 1)
+        top.addWidget(self.dz_img, 1)
+        lay.addLayout(top)
+        opts = QHBoxLayout()
         self.chk_white = QCheckBox("Убрать белый фон")
-        self.chk_white.setStyleSheet("font-size: 15px;")
+        self.chk_white.setToolTip("Сделать белый фон картинки прозрачным — как настоящая печать на бумаге")
         self.chk_white.toggled.connect(self.white_toggled)
-        top.addWidget(self.chk_white)
-        top.addSpacing(20)
-        top.addWidget(QLabel("Страница:"))
+        opts.addWidget(self.chk_white)
+        opts.addSpacing(20)
+        opts.addWidget(QLabel("Страница:"))
         self.spin = QSpinBox()
         self.spin.setMinimum(1)
-        self.spin.setStyleSheet("font-size: 15px; min-width: 60px;")
+        self.spin.setToolTip("Какую страницу показать")
         self.spin.valueChanged.connect(self.show_page)
-        top.addWidget(self.spin)
+        opts.addWidget(self.spin)
         self.lbl = QLabel("")
-        top.addWidget(self.lbl)
-        top.addStretch()
-        lay.addLayout(top)
+        self.lbl.setObjectName("Muted")
+        opts.addWidget(self.lbl)
+        opts.addStretch()
+        lay.addLayout(opts)
 
         self.view = PageView(color="#1565c0")
         self.view.rectChanged.connect(lambda *_: self.commit("положение картинки"))
@@ -66,9 +82,47 @@ class ImageTab(QWidget, UndoMixin):
         for w in (self.r_cur, self.r_all, self.r_sel, self.ed_pages):
             bottom.addWidget(w)
         bottom.addStretch()
-        bottom.addWidget(big_button("💾 Сохранить новый PDF…", self.save, primary=True))
+        self.r_cur.setToolTip("Картинка встанет только на показанную страницу")
+        self.r_all.setToolTip("Картинка встанет на каждую страницу файла")
+        self.r_sel.setToolTip("Картинка встанет на перечисленные страницы")
+        self.where = bottom
+        self.btn_save = big_button("💾 Сохранить новый PDF…", self.save, primary=True)
+        bottom.addWidget(self.btn_save)
         lay.addLayout(bottom)
         self.reset_undo()
+
+    # ---------- шаги, подсказка, перетаскивание ----------
+    def step_index(self) -> int:
+        if not (self.doc and self.img_path):
+            return 0
+        if not self.undo_stack.count() and not self._saved:
+            return 1
+        return 3 if self._saved and not self.is_dirty() else 2
+
+    def accept_files(self, paths: list[str]):
+        for p in paths:
+            if p.lower().endswith(".pdf"):
+                self.open_pdf(p)
+            else:
+                self.open_image(p)
+
+    def tour_steps(self):
+        from .tour import Step
+        return [
+            Step(None, "Вставка картинки", "Здесь можно поставить печать, подпись или логотип на страницы PDF. "
+                 "Нажимайте «Далее»."),
+            Step(self.dz_pdf, "1. Откройте PDF", "Нажмите или перетащите сюда документ."),
+            Step(self.dz_img, "…и картинку", "PNG или JPG. Лучше всего — скан печати на белом фоне."),
+            Step(self.chk_white, "Убрать белый фон", "Отметьте, чтобы белый фон картинки стал прозрачным и не "
+                 "закрывал текст документа."),
+            Step(self.view, "2. Поставьте на место", "Перетащите картинку мышью. Размер — за синий квадратик "
+                 "в углу. Ctrl + колесо мыши — масштаб страницы."),
+            Step(self.spin, "Другая страница", "Выберите, какую страницу показать."),
+            Step(self.r_cur, "Куда ставить", "Только на эту страницу, на все страницы или на перечисленные "
+                 "(например «1-3, 5»)."),
+            Step(self.btn_save, "3. Сохраните", "Создаётся новый PDF, исходный не меняется. "
+                 "Ctrl + Z отменяет последнее действие."),
+        ]
 
     # ---------- Ctrl+Z ----------
     def get_state(self):
@@ -92,7 +146,8 @@ class ImageTab(QWidget, UndoMixin):
         if path:
             self.path, self.doc = path, pymupdf.open(path)
             self.spin.setMaximum(len(self.doc))
-            self.lbl.setText(f"из {len(self.doc)} — {os.path.basename(path)}")
+            self.lbl.setText(f"из {len(self.doc)}")
+            self.dz_pdf.set_loaded(f"{os.path.basename(path)} · {len(self.doc)} стр.")
             self.show_page()
             if self.img_path:
                 self.reload_image(initial=self.view.get_nrect() is None)
@@ -104,6 +159,7 @@ class ImageTab(QWidget, UndoMixin):
             remember_dir(path)
         if path:
             self.img_path = path
+            self.dz_img.set_loaded(os.path.basename(path))
             self.reload_image(initial=True)
             self.commit("картинка")
 
@@ -147,7 +203,9 @@ class ImageTab(QWidget, UndoMixin):
             if out:
                 imageinsert.insert_image(self.path, self.img, self.view.get_nrect(), tp, out)
                 self.mark_saved()
-                info(self, f"Сохранено: {out}\nКартинка поставлена на {len(tp)} стр.")
+                self._saved = True
+                info(self, f"Готово! Картинка поставлена на {len(tp)} стр. Файл: {os.path.basename(out)}",
+                     action=("Открыть папку", lambda: open_folder(out)))
         except Exception as e:  # noqa: BLE001
             log.exception("Вставка картинки")
             error(self, str(e))

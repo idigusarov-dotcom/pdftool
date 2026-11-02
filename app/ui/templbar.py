@@ -5,10 +5,11 @@ import os
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QMessageBox,
-                               QPushButton, QWidget)
+                               QPushButton, QVBoxLayout, QWidget)
 
 from ..core import templates as tp
 from .infra import last_dir, remember_dir
+from .widgets import big_button, error, info
 
 NONE = "— без шаблона —"
 
@@ -21,27 +22,33 @@ class TemplateBar(QWidget):
     def __init__(self, capture, parent=None, auto_text="Определять бланк каждой страницы"):
         super().__init__(parent)
         self.capture = capture
-        h = QHBoxLayout(self)
-        h.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(4)
+        h = QHBoxLayout()
+        outer.addLayout(h)
         h.addWidget(QLabel("Шаблон бланка:"))
         self.cb = QComboBox()
         self.cb.setMinimumWidth(200)
+        self.cb.setToolTip("Выберите шаблон — рамки, зоны и чернила подставятся сами")
         self.cb.activated.connect(self._chosen)
         h.addWidget(self.cb)
-        for text, slot, tip in (("💾 Сохранить", self.save, "Сохранить текущие рамки, зоны и чернила как шаблон"),
-                                ("✎ Переименовать", self.rename, ""), ("🗑 Удалить", self.delete, ""),
-                                ("⇪ Экспорт…", self.export, "Сохранить шаблон в файл (для другого компьютера)"),
-                                ("⇩ Импорт…", self.import_, "Загрузить шаблон из файла")):
-            b = QPushButton(text)
-            b.setToolTip(tip)
-            b.clicked.connect(slot)
+        self.buttons = {}
+        for key, text, ic, slot, tip in (
+                ("save", "Сохранить", "save", self.save, "Запомнить текущие рамки, зоны номера и чернила как шаблон"),
+                ("rename", "", "pencil", self.rename, "Переименовать выбранный шаблон"),
+                ("delete", "", "trash-2", self.delete, "Удалить выбранный шаблон"),
+                ("export", "Экспорт", "upload", self.export, "Сохранить шаблон в файл, чтобы перенести на другой компьютер"),
+                ("import", "Импорт", "download", self.import_, "Загрузить шаблон из файла")):
+            b = big_button(text, slot, icon_name=ic, tip=tip, ghost=not text)
+            self.buttons[key] = b
             h.addWidget(b)
         self.chk_auto = QCheckBox(auto_text)
         self.chk_auto.setChecked(True)
         self.chk_auto.setToolTip("Если в файле бланки разного вида, для каждой страницы выбирается похожий шаблон,\n"
                                  "и зоны номера сдвигаются вслед за бланком.")
-        h.addWidget(self.chk_auto)
         h.addStretch()
+        outer.addWidget(self.chk_auto)
         self.reload()
 
     # ---------- список ----------
@@ -91,6 +98,7 @@ class TemplateBar(QWidget):
         tp.save(t)
         self.reload(name)
         self.changed.emit()
+        info(self, f"Шаблон «{name}» сохранён.")
         return t
 
     def rename(self):
@@ -103,7 +111,7 @@ class TemplateBar(QWidget):
         try:
             tp.rename(old, new.strip())
         except ValueError as e:
-            return QMessageBox.warning(self, "Шаблон", str(e))
+            return error(self, str(e))
         self.reload(new.strip())
         self.changed.emit()
 
@@ -120,12 +128,13 @@ class TemplateBar(QWidget):
     def export(self):
         name = self.current_name()
         if not name:
-            return QMessageBox.information(self, "Экспорт", "Сначала выберите шаблон.")
+            return info(self, "Сначала выберите шаблон в списке.")
         path, _ = QFileDialog.getSaveFileName(self, "Экспорт шаблона", os.path.join(last_dir(), name + ".json"),
                                               "Шаблон PdfTool (*.json)")
         if path:
             remember_dir(path)
             tp.export_to(tp.get(name), path)
+            info(self, f"Шаблон сохранён в файл: {path}")
 
     def import_(self, path: str = ""):
         if not path:
@@ -136,7 +145,7 @@ class TemplateBar(QWidget):
         try:
             t = tp.import_from(path)
         except Exception as e:  # noqa: BLE001
-            return QMessageBox.warning(self, "Импорт", f"Не удалось прочитать шаблон: {e}")
+            return error(self, f"Не удалось прочитать шаблон: {e}")
         self.reload(t.name)
         self.changed.emit()
         self.applied.emit(t)

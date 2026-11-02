@@ -16,10 +16,12 @@ from ..core import signatures as sig
 from ..core.ink import INK_MODES
 from ..core.logsetup import log
 from ..core.pdfutil import NRect, safe_output_path
+from . import style
 from .infra import UndoMixin, load_rect, run_task, save_rect, settings
+from .chrome import Collapsible, DropZone, ScreenHeader
 from .templbar import TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
-from .widgets import (PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar)
+from .widgets import (open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar)
 
 HELP = ("1) Откройте АКТЫ и РАСПИСКИ.  2) Сопоставьте: вручную в таблице или кнопкой «Распознать номера» "
         "(сначала задайте зелёную «зону номера» на акте и на расписке).  3) Красная рамка — откуда берём подпись, "
@@ -48,24 +50,30 @@ class SignTab(QWidget, UndoMixin):
         self.zone_rec = load_rect("sign/zone_rec", DEFAULT_ZONE_REC)
 
         lay = QVBoxLayout(self)
-        h = QLabel(HELP)
-        h.setWordWrap(True)
-        lay.addWidget(h)
+        lay.setContentsMargins(24, 18, 24, 16)
+        lay.setSpacing(12)
+        self.header = ScreenHeader("Перенос подписей",
+                                   "Подписи жильцов из актов переносятся в расписки. Исходные файлы не меняются.",
+                                   ["Откройте акты и расписки", "Проверьте пары и рамки", "Сохраните новый PDF"])
+        lay.addWidget(self.header)
         top = QHBoxLayout()
-        top.addWidget(big_button("📄 Открыть акты…", self.open_acts))
-        self.lbl_acts = QLabel("акты не выбраны")
-        top.addWidget(self.lbl_acts)
-        top.addSpacing(16)
-        top.addWidget(big_button("📄 Открыть расписки…", self.open_receipts))
-        self.lbl_rec = QLabel("расписки не выбраны")
-        top.addWidget(self.lbl_rec)
-        top.addStretch()
-        top.addWidget(big_button("🔢 Распознать номера и сопоставить", self.recognize))
+        top.setSpacing(12)
+        self.dz_acts = DropZone("Акты", "Перетащите сюда PDF с актами (откуда берём подписи) или нажмите")
+        self.dz_acts.clicked.connect(self.open_acts)
+        self.dz_acts.files.connect(lambda ps: self.open_acts(ps[0]))
+        self.dz_rec = DropZone("Расписки", "Перетащите сюда PDF с расписками (куда ставим подписи) или нажмите")
+        self.dz_rec.clicked.connect(self.open_receipts)
+        self.dz_rec.files.connect(lambda ps: self.open_receipts(ps[0]))
+        top.addWidget(self.dz_acts, 1)
+        top.addWidget(self.dz_rec, 1)
+        self.btn_recognize = big_button("🔢 Распознать номера и сопоставить", self.recognize)
+        top.addWidget(self.btn_recognize)
         lay.addLayout(top)
         self.tbar = TemplateBar(self.capture_template)
         self.tbar.applied.connect(self.apply_template)
-        lay.addWidget(self.tbar)
         self.page_tpl: dict = {"act": {}, "rec": {}}
+        self._reviewed = False
+        self._saved = False
 
         split = QSplitter(Qt.Horizontal)
         self.table = QTableWidget(0, 5)
@@ -86,6 +94,8 @@ class SignTab(QWidget, UndoMixin):
         v1.addLayout(zoom_bar(self.view_act))
         self.chk_src_own = QCheckBox("Рамка только для этой страницы акта")
         v1.addWidget(self.chk_src_own)
+        self.chk_src_own.setToolTip("Отметьте, если у этого акта подпись в другом месте: рамка изменится только здесь")
+        self.card_act = g1
         split.addWidget(g1)
 
         g2 = QGroupBox("Расписка — куда поставить (синяя рамка)")
@@ -96,24 +106,34 @@ class SignTab(QWidget, UndoMixin):
         v2.addLayout(zoom_bar(self.view_rec))
         self.chk_dst_own = QCheckBox("Рамка только для этой расписки")
         v2.addWidget(self.chk_dst_own)
+        self.chk_dst_own.setToolTip("Отметьте, чтобы рамка изменилась только для этой расписки")
+        self.card_rec = g2
         split.addWidget(g2)
-        split.setSizes([480, 420, 420])
+        self.split = split
+        split.setSizes([520, 380, 380])
         lay.addWidget(split, 1)
 
-        # что рисуем мышью
+        # ---- Дополнительно: шаблоны, режим рисования, чернила ----
+        self.advanced = Collapsible("Дополнительно: шаблоны бланков, зоны номера, цвет чернил")
+        self.advanced.add(self.tbar)
         draw = QHBoxLayout()
         draw.addWidget(QLabel("Рисовать мышью:"))
         self.r_sig = QRadioButton("рамку подписи")
+        self.r_sig.setToolTip("Мышью на странице рисуется красная/синяя рамка подписи")
         self.r_zone = QRadioButton("зелёную зону номера квартиры")
+        self.r_zone.setToolTip("Мышью рисуется зелёная зона, где написан номер квартиры (для распознавания)")
         self.r_sig.setChecked(True)
         grp = QButtonGroup(self)
-        for b in (self.r_sig, self.r_zone):
-            grp.addButton(b)
-            draw.addWidget(b)
+        for b_ in (self.r_sig, self.r_zone):
+            grp.addButton(b_)
+            draw.addWidget(b_)
         self.r_sig.toggled.connect(self.draw_mode_changed)
-        draw.addSpacing(20)
+        draw.addStretch()
+        self.advanced.add(draw)
+        draw = QHBoxLayout()
         draw.addWidget(QLabel("Цвет чернил:"))
         self.cb_mode = QComboBox()
+        self.cb_mode.setToolTip("Какой ручкой подписывались: синяя — обычно; чёрная — убирает линии бланка")
         for k, v in INK_MODES.items():
             self.cb_mode.addItem(v, k)
         self.cb_mode.setCurrentIndex(max(0, self.cb_mode.findData(s.value("sign/ink_mode", "blue"))))
@@ -124,21 +144,28 @@ class SignTab(QWidget, UndoMixin):
         self.sl_sens.setRange(0, 100)
         self.sl_sens.setValue(int(float(s.value("sign/sens", 50))))
         self.sl_sens.setFixedWidth(150)
+        self.sl_sens.setToolTip("Больше — захватывает бледные штрихи, меньше — меньше лишних точек")
         self.sl_sens.valueChanged.connect(self.ink_changed)
         draw.addWidget(self.sl_sens)
-        self.lbl_ink = QLabel()
-        self.lbl_ink.setMinimumSize(280, 70)
-        self.lbl_ink.setStyleSheet("background: white; border: 1px solid #bbb;")
-        self.lbl_ink.setToolTip("Так будет выглядеть вырезанная подпись")
-        draw.addWidget(QLabel("Подпись:"))
-        draw.addWidget(self.lbl_ink, 1)
-        lay.addLayout(draw)
+        draw.addStretch()
+        self.btn_reset = big_button("↺ Рамки по умолчанию", self.reset_rects)
+        draw.addWidget(self.btn_reset)
+        self.advanced.add(draw)
+        lay.addWidget(self.advanced)
 
         bottom = QHBoxLayout()
-        bottom.addWidget(big_button("↺ Рамки по умолчанию", self.reset_rects))
+        bottom.addWidget(QLabel("Так будет выглядеть подпись:"))
+        self.lbl_ink = QLabel()
+        self.lbl_ink.setObjectName("InkPreview")
+        self.lbl_ink.setFixedSize(300, 56)
+        self.lbl_ink.setAlignment(Qt.AlignCenter)
+        self.lbl_ink.setToolTip("Вырезанная подпись из выбранного акта — проверьте, что она целая и без лишнего")
+        bottom.addWidget(self.lbl_ink)
         bottom.addStretch()
-        bottom.addWidget(big_button("👁 Предпросмотр", self.preview))
-        bottom.addWidget(big_button("💾 Сохранить новый PDF…", self.save, primary=True))
+        self.btn_preview = big_button("👁 Предпросмотр", self.preview)
+        bottom.addWidget(self.btn_preview)
+        self.btn_save = big_button("💾 Сохранить новый PDF…", self.save, primary=True)
+        bottom.addWidget(self.btn_save)
         lay.addLayout(bottom)
         self._ink_timer = QTimer(self, singleShot=True, interval=250, timeout=self.update_ink_preview)
 
@@ -171,7 +198,7 @@ class SignTab(QWidget, UndoMixin):
         path = path or ask_open_pdf(self, "Файл с актами")
         if path:
             self.acts_path, self.acts = path, pymupdf.open(path)
-            self.lbl_acts.setText(f"{os.path.basename(path)} ({len(self.acts)} стр.)")
+            self.dz_acts.set_loaded(f"{os.path.basename(path)} · {len(self.acts)} стр.")
             self.nums_act = []
             self.page_tpl = {"act": {}, "rec": {}}
             self.rebuild()
@@ -180,7 +207,7 @@ class SignTab(QWidget, UndoMixin):
         path = path or ask_open_pdf(self, "Файл с расписками")
         if path:
             self.rec_path, self.rec = path, pymupdf.open(path)
-            self.lbl_rec.setText(f"{os.path.basename(path)} ({len(self.rec)} стр.)")
+            self.dz_rec.set_loaded(f"{os.path.basename(path)} · {len(self.rec)} стр.")
             self.nums_rec = []
             self.page_tpl = {"act": {}, "rec": {}}
             self.rebuild()
@@ -188,6 +215,7 @@ class SignTab(QWidget, UndoMixin):
     def rebuild(self):
         if not (self.acts and self.rec):
             return
+        self._reviewed = self._saved = False
         self._loading = True
         s = settings()
         self.job = sig.TransferJob(self.acts_path, self.rec_path, sig.guess_mapping(len(self.rec), len(self.acts)),
@@ -263,11 +291,11 @@ class SignTab(QWidget, UndoMixin):
             self.table.item(r, C_RNUM).setToolTip(f"Бланк расписки: {tr or 'не узнан'}")
             c = self.conf[r]
             self.table.item(r, C_CONF).setText("" if c is None else f"{int(round(c * 100))}%")
-            color = QColor("white")
+            color = style.mark("white")
             if c is not None and (c < 0.5 or (rn and an and rn != an)):
-                color = QColor("#ffe082")   # проверить
+                color = style.mark("#ffe082")   # проверить
             if m is None:
-                color = QColor("#eeeeee")
+                color = style.mark("#eeeeee")
             for col in (C_RNUM, C_ANUM, C_CONF):
                 self.table.item(r, col).setBackground(color)
 
@@ -320,6 +348,59 @@ class SignTab(QWidget, UndoMixin):
 
         t = run_task(work, done, fail, lambda i, n: dlg.setValue(int(100 * i / max(n, 1))))
         dlg.canceled.connect(lambda: setattr(t, "cancelled", True))
+
+    # ---------- шаги, подсказка, перетаскивание ----------
+    def step_index(self) -> int:
+        if not self.job:
+            return 0
+        if self._saved and not self.is_dirty():
+            return 3
+        return 2 if (self._reviewed or self.undo_stack.count()) else 1
+
+    def accept_files(self, paths: list[str]):
+        """Файлы, брошенные на экран: первый — акты (если ещё нет), затем расписки."""
+        for p in paths[:2]:
+            if self.acts is None or (len(paths) == 2 and p == paths[0]):
+                self.open_acts(p)
+            else:
+                self.open_receipts(p)
+
+    def tour_steps(self):
+        from .tour import Step
+        adv = lambda: self.advanced.set_expanded(True)   # noqa: E731
+        return [
+            Step(None, "Перенос подписей за 3 шага",
+                 "Программа берёт подпись жильца из <b>акта</b> и ставит её в <b>расписку</b> той же квартиры. "
+                 "Исходные файлы не меняются — сохраняется новый PDF.<br><br>Нажимайте «Далее»."),
+            Step(self.header.steps, "Шаги вверху", "Здесь видно, что уже сделано (зелёная галочка) "
+                 "и что делать дальше (выделенный шаг)."),
+            Step(self.dz_acts, "1. Откройте акты", "Нажмите сюда и выберите PDF с <b>актами</b> — "
+                 "там стоят подписи жильцов. Можно просто перетащить файл мышью из папки."),
+            Step(self.dz_rec, "…и расписки", "Сюда — PDF с <b>расписками</b>, в которые нужно поставить подписи."),
+            Step(self.table, "2. Проверьте пары", "Каждая строка — одна расписка. В столбце «Подпись из акта» "
+                 "выберите, из какой страницы акта брать подпись. «не ставить» — расписка останется пустой.<br>"
+                 "Щёлкните строку — справа появятся обе страницы."),
+            Step(self.btn_recognize, "Автоподбор (по желанию)", "Программа попробует прочитать номера квартир и "
+                 "сама подобрать пары. Рукописные цифры читаются неточно — <b>жёлтые строки проверьте обязательно</b>, "
+                 "остальные тоже просмотрите."),
+            Step(self.card_act, "Красная рамка — откуда брать",
+                 "На странице акта красная рамка показывает, где подпись. Потяните рамку мышью, чтобы сдвинуть, "
+                 "или за синий квадратик в углу — чтобы изменить размер. Можно нарисовать новую рамку мышью."),
+            Step(self.card_rec, "Синяя рамка — куда ставить", "На расписке синяя рамка — место, куда встанет "
+                 "подпись. Двигается так же. Масштаб — кнопками внизу или Ctrl + колесо мыши."),
+            Step(self.lbl_ink, "Проверьте подпись", "Здесь видно, как вырезалась подпись. Если она обрезана — "
+                 "увеличьте красную рамку. Если много лишнего — уменьшите."),
+            Step(self.advanced, "Дополнительно", "Шаблоны бланков (запомнить рамки для таких же бумаг), "
+                 "зоны номера квартиры и цвет чернил. Нужны не всегда.", adv),
+            Step(self.tbar, "Шаблоны бланков", "Настроили рамки — нажмите «Сохранить» и дайте имя, например "
+                 "«Акт ЦО». В следующий раз выберите шаблон в списке, и всё встанет само. "
+                 "«Экспорт» — файл шаблона для другого компьютера.", adv),
+            Step(self.cb_mode, "Цвет чернил", "Если подписывались чёрной ручкой — выберите «чёрная». Ползунок "
+                 "«Чувствительность» правее: больше — берёт бледные штрихи.", adv),
+            Step(self.btn_preview, "Предпросмотр", "Покажет все расписки с подписями, ничего не сохраняя."),
+            Step(self.btn_save, "3. Сохраните", "Создаёт новый PDF с подписями. Программа предложит имя рядом с "
+                 "исходным файлом. Ошиблись — Ctrl + Z отменяет последнее действие."),
+        ]
 
     # ---------- шаблоны ----------
     def capture_template(self, name: str) -> tp.Template:
@@ -482,6 +563,7 @@ class SignTab(QWidget, UndoMixin):
     def preview(self):
         if not self.job:
             return error(self, "Сначала откройте акты и расписки.")
+        self._reviewed = True
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             dlg = QDialog(self)
@@ -519,8 +601,10 @@ class SignTab(QWidget, UndoMixin):
             return error(self, str(e))
         QApplication.restoreOverrideCursor()
         self.mark_saved()
-        msg = f"Сохранено: {out}\nПодписей поставлено: {len(rep['placed'])}, пустых: {len(rep['blank'])}."
+        self._saved = True
+        msg = (f"Готово! Сохранён файл {os.path.basename(out)}.\nПодписей поставлено: {len(rep['placed'])}, "
+               f"пустых расписок: {len(rep['blank'])}.")
         if rep["empty_ink"]:
-            msg += "\nВНИМАНИЕ: в рамке не найдено чернил для расписок: " + \
-                   ", ".join(str(i + 1) for i in rep["empty_ink"])
-        info(self, msg)
+            msg += "\nВнимание: не нашлось подписи в рамке для расписок: " + \
+                   ", ".join(str(i + 1) for i in rep["empty_ink"]) + ". Проверьте красную рамку."
+        info(self, msg, action=("Открыть папку", lambda: open_folder(out)))

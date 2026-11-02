@@ -20,19 +20,28 @@ D = os.environ.get("PDFTOOL_DATA", "/workspace")
 OUT = os.path.join(os.path.dirname(__file__), "..", "screens")
 os.makedirs(OUT, exist_ok=True)
 app = QApplication(sys.argv)
+from app.main import setup_app  # noqa: E402
 from app.ui.infra import settings  # noqa: E402
 settings().clear()
+for k in ("sign", "batch", "sort", "image", "pages"):
+    settings().setValue(f"tour/{k}", True)   # не показывать предложение подсказки на скриншотах
+setup_app(app)
+W, H = (int(x) for x in os.environ.get("SCREEN_SIZE", "1366x768").split("x"))
 w = MainWindow()
-w.resize(1500, 950)
+w.resize(W, H)
 w.show()
+P = os.environ.get("SCREEN_PREFIX", "v13_")
 
 
-def shot(name):
+def shot(name, keep_toasts=False):
     import time
+    if not keep_toasts:
+        for t in list(w._toasts):
+            t.close_now()
     for _ in range(20):
         app.processEvents()
         time.sleep(0.03)
-    w.grab().save(os.path.join(OUT, name))
+    w.grab().save(os.path.join(OUT, P + name))
 
 
 tmp = tempfile.mkdtemp()
@@ -43,6 +52,8 @@ w.sign.table.setCurrentCell(0, 2)
 w.sign.show_row(0)
 w.sign.update_ink_preview()
 w.sign.tbar.save("Акт ЦО (Кржижановского)")
+for t in list(w._toasts):
+    t.close_now()
 shot("1_podpisi.png")
 w.sign.save(os.path.join(tmp, "sign.pdf"))
 
@@ -94,6 +105,30 @@ for _ in range(20):
     time.sleep(0.03)
 w.batch._summary.move(w.geometry().center() - w.batch._summary.rect().center())
 shot("5_paket.png")
-w.batch._summary.grab().save(os.path.join(OUT, "5b_paket_itog.png"))
+w.batch._summary.grab().save(os.path.join(OUT, P + "5b_paket_itog.png"))
+w.batch._summary.close()
+
+# пошаговые подсказки
+w.show_screen(w.sign)
+tour = w.start_tour()
+for i, nm in ((0, "6_tour_podpisi_1.png"), (2, "6_tour_podpisi_3.png"), (6, "6_tour_podpisi_7.png"),
+              (10, "6_tour_podpisi_11.png")):
+    tour.go(i)
+    shot(nm)
+tour.close_tour()
+w.show_screen(w.batch)
+tour = w.start_tour()
+tour.go(3)
+shot("6_tour_paket_4.png")
+tour.close_tour()
+w.show_screen(w.helppage)
+shot("7_spravka.png")
+w.show_screen(w.sign)
+w.toast("Готово! Сохранён файл расписки_с_подписями.pdf. Подписей поставлено: 6.", "ok",
+        action=("Открыть папку", lambda: None))
+shot("8_uvedomlenie.png", keep_toasts=True)
+w.toggle_theme()
+shot("9_temnaya_tema.png")
+w.toggle_theme()
 print(w.batch.summary_text(w.batch.last_results))
 print("ok", sorted(os.listdir(tmp)))

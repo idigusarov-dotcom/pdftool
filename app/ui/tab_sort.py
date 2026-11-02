@@ -12,10 +12,12 @@ from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QProgressDialo
 from ..core import numbers, sorting
 from ..core.logsetup import log
 from ..core.pdfutil import NRect, safe_output_path
+from . import style
 from .infra import UndoMixin, load_rect, run_task, save_rect, settings
+from .chrome import Collapsible, DropZone, ScreenHeader
 from .templbar import TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
-from .widgets import PageView, ask_open_pdf, ask_save, big_button, error, info, zoom_bar
+from .widgets import open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, zoom_bar
 
 HELP = ("Откройте PDF. Номер квартиры впишите в таблицу (двойной щелчок) или нажмите «Распознать номера» — "
         "перед этим нарисуйте на странице справа зелёную зону, где написан номер (для второго вида бланка — зону 2). "
@@ -34,23 +36,29 @@ class SortTab(QWidget, UndoMixin):
         self.unsure: set[int] = set()   # страницы с неуверенным распознаванием
         self._icons: dict[int, QIcon] = {}
         self.tpl_names: dict[int, str] = {}
+        self._saved = False
         self.zones = {"zone": load_rect("sort/zone1", DEFAULT_ZONE), "zone2": load_rect("sort/zone2", None)}
         lay = QVBoxLayout(self)
-        h = QLabel(HELP)
-        h.setWordWrap(True)
-        lay.addWidget(h)
+        lay.setContentsMargins(24, 18, 24, 16)
+        lay.setSpacing(12)
+        self.header = ScreenHeader("Сортировка по квартирам",
+                                   "Страницы раскладываются по номерам квартир. Номер можно вписать или распознать.",
+                                   ["Откройте PDF", "Проверьте номера", "Сохраните по порядку"])
+        lay.addWidget(self.header)
         top = QHBoxLayout()
-        top.addWidget(big_button("📄 Открыть PDF…", self.open))
-        self.lbl = QLabel("файл не выбран")
-        top.addWidget(self.lbl)
-        top.addStretch()
-        top.addWidget(big_button("🔢 Распознать номера", self.recognize))
-        top.addWidget(big_button("🔎 Из текста PDF", self.guess))
-        top.addWidget(big_button("↕ Упорядочить таблицу", self.sort_table))
+        top.setSpacing(10)
+        self.dz = DropZone("PDF для сортировки", "Перетащите сюда PDF или нажмите, чтобы выбрать")
+        self.dz.clicked.connect(self.open)
+        self.dz.files.connect(lambda ps: self.open(ps[0]))
+        top.addWidget(self.dz, 1)
+        self.btn_recognize = big_button("🔢 Распознать номера", self.recognize)
+        self.btn_guess = big_button("🔎 Из текста PDF", self.guess, ghost=True)
+        self.btn_order = big_button("↕ Упорядочить таблицу", self.sort_table)
+        for b_ in (self.btn_recognize, self.btn_guess, self.btn_order):
+            top.addWidget(b_)
         lay.addLayout(top)
         self.tbar = TemplateBar(self.capture_template)
         self.tbar.applied.connect(self.apply_template)
-        lay.addWidget(self.tbar)
 
         split = QSplitter(Qt.Horizontal)
         self.table = QTableWidget(0, 3)
@@ -87,12 +95,19 @@ class SortTab(QWidget, UndoMixin):
         split.setSizes([450, 550])
         lay.addWidget(split, 1)
 
+        self.advanced = Collapsible("Дополнительно: шаблоны бланков")
+        self.advanced.add(self.tbar)
+        lay.addWidget(self.advanced)
+        self.zone_bar = right
         bottom = QHBoxLayout()
         self.stat = QLabel("")
+        self.stat.setObjectName("Muted")
         bottom.addWidget(self.stat)
         bottom.addStretch()
-        bottom.addWidget(big_button("📋 Сохранить список (CSV)…", self.save_csv))
-        bottom.addWidget(big_button("💾 Сохранить отсортированный PDF…", self.save, primary=True))
+        self.btn_csv = big_button("📋 Сохранить список (CSV)…", self.save_csv)
+        self.btn_save = big_button("💾 Сохранить отсортированный PDF…", self.save, primary=True)
+        bottom.addWidget(self.btn_csv)
+        bottom.addWidget(self.btn_save)
         lay.addLayout(bottom)
 
     # ---------- Ctrl+Z ----------
@@ -114,8 +129,9 @@ class SortTab(QWidget, UndoMixin):
         if not path:
             return
         self.path, self.doc = path, pymupdf.open(path)
-        self.lbl.setText(f"{os.path.basename(path)} ({len(self.doc)} стр.)")
+        self.dz.set_loaded(f"{os.path.basename(path)} · {len(self.doc)} стр.")
         self.unsure = set()
+        self._saved = False
         self.tpl_names = {}
         self._icons = {}
         if self.loader:
@@ -197,6 +213,44 @@ class SortTab(QWidget, UndoMixin):
         if nr is not None and key in self.zones:
             self.zones[key] = nr
             save_rect("sort/zone1" if key == "zone" else "sort/zone2", nr)
+
+    # ---------- шаги, подсказка, перетаскивание ----------
+    def step_index(self) -> int:
+        if not self.doc:
+            return 0
+        vals = self.values_by_page()
+        if any(not v for v in vals) or self.unsure:
+            return 1
+        return 3 if self._saved and not self.is_dirty() else 2
+
+    def accept_files(self, paths: list[str]):
+        self.open(paths[0])
+
+    def tour_steps(self):
+        from .tour import Step
+        adv = lambda: self.advanced.set_expanded(True)   # noqa: E731
+        return [
+            Step(None, "Сортировка по квартирам", "Здесь страницы большого PDF (акты, расписки) раскладываются "
+                 "по порядку номеров квартир. Нажимайте «Далее»."),
+            Step(self.dz, "1. Откройте PDF", "Нажмите или перетащите сюда файл со сканами."),
+            Step(self.table, "Таблица страниц", "Каждая строка — страница файла. В столбце «Квартира» дважды "
+                 "щёлкните и впишите номер. <b>Красные</b> — номер повторяется, <b>оранжевые</b> — распознано "
+                 "неуверенно, их нужно проверить."),
+            Step(self.view, "Страница крупно", "Здесь видна выбранная страница. Зелёная рамка — <b>зона номера</b>: "
+                 "место, где на бланке написан номер квартиры. Нарисуйте её мышью вокруг номера."),
+            Step(self.r_z2, "Второй вид бланка", "Если в файле бланки двух видов и номер стоит в разных местах — "
+                 "отметьте «зона 2» и нарисуйте вторую зону."),
+            Step(self.btn_recognize, "Распознать номера", "Программа прочитает рукописные номера в зелёной зоне и "
+                 "впишет их в пустые ячейки. Читает неточно — проверьте каждую строку по картинке."),
+            Step(self.btn_guess, "Из текста PDF", "Если PDF не скан, а создан на компьютере — номера можно взять "
+                 "из текста файла. Для сканов не работает."),
+            Step(self.btn_order, "2. Проверьте и упорядочьте", "Расставляет строки по номеру квартиры, чтобы "
+                 "было удобно проверять. Внизу видно, сколько страниц без номера и есть ли повторы."),
+            Step(self.advanced, "Шаблоны бланков", "Чтобы не рисовать зоны каждый раз, сохраните их как шаблон "
+                 "и потом просто выбирайте в списке.", adv),
+            Step(self.btn_save, "3. Сохраните", "Новый PDF со страницами по порядку квартир. "
+                 "«Сохранить список» — таблица для Excel. Ctrl + Z отменяет последнее действие."),
+        ]
 
     # ---------- шаблоны ----------
     def capture_template(self, name: str):
@@ -283,13 +337,13 @@ class SortTab(QWidget, UndoMixin):
         for r in range(self.table.rowCount()):
             p = self.table.item(r, 0).data(Qt.UserRole)
             v = self.table.item(r, 1).text().strip()
-            note, color = "", QColor("white")
+            note, color = "", style.mark("white")
             if not v:
-                note, color = "нет номера", QColor("#fff8e1")
+                note, color = "нет номера", style.mark("#fff8e1")
             elif v in dup:
-                note, color = "ПОВТОР", QColor("#ffcdd2")
+                note, color = "ПОВТОР", style.mark("#ffcdd2")
             elif p in self.unsure:
-                note, color = "проверьте (распознано неуверенно)", QColor("#ffcc80")
+                note, color = "проверьте (распознано неуверенно)", style.mark("#ffcc80")
             for c in (1, 2):
                 self.table.item(r, c).setBackground(color)
             if self.tpl_names.get(p):
@@ -322,7 +376,9 @@ class SortTab(QWidget, UndoMixin):
             try:
                 sorting.export_sorted(self.path, self.values_by_page(), out)
                 self.mark_saved()
-                info(self, f"Сохранено: {out}")
+                self._saved = True
+                info(self, f"Готово! Страницы сохранены по порядку квартир: {os.path.basename(out)}",
+                     action=("Открыть папку", lambda: open_folder(out)))
             except Exception as e:  # noqa: BLE001
                 log.exception("Сортировка")
                 error(self, str(e))

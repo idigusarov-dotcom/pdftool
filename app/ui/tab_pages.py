@@ -16,7 +16,8 @@ from ..core.logsetup import log
 from ..core.pdfutil import safe_output_path
 from .infra import UndoMixin, last_dir, remember_dir
 from .thumbs import ThumbLoader, placeholder_icon, visible_rows
-from .widgets import ask_open_pdf, ask_save, big_button, error, info
+from .chrome import DropZone, ScreenHeader
+from .widgets import open_folder, ask_open_pdf, ask_save, big_button, error, info
 
 
 class PagesTab(QWidget, UndoMixin):
@@ -27,12 +28,29 @@ class PagesTab(QWidget, UndoMixin):
         self._pix: dict[int, QPixmap] = {}
         self.doc = None
         self.path = ""
-        lay = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 18, 24, 16)
+        outer.setSpacing(12)
+        self.header = ScreenHeader("Страницы", "Объединить несколько PDF, повернуть, удалить, переставить или "
+                                   "разделить страницы. Исходные файлы не меняются.",
+                                   ["Откройте файлы", "Измените страницы", "Сохраните"])
+        outer.addWidget(self.header)
+        lay = QHBoxLayout()
+        lay.setSpacing(14)
+        outer.addLayout(lay, 1)
+        self._saved = False
 
         # --- объединение ---
         g = QGroupBox("Объединить несколько PDF")
         v = QVBoxLayout(g)
-        v.addWidget(QLabel("Добавьте файлы, порядок меняйте перетаскиванием."))
+        self.dz_merge = DropZone("Файлы для объединения", "Перетащите сюда несколько PDF или нажмите",
+                                 icon_name="files")
+        self.dz_merge.clicked.connect(self.add_files)
+        self.dz_merge.files.connect(self.add_files)
+        v.addWidget(self.dz_merge)
+        hint = QLabel("Порядок файлов меняйте перетаскиванием в списке.")
+        hint.setObjectName("Muted")
+        v.addWidget(hint)
         self.merge_list = QListWidget()
         self.merge_list.setDragDropMode(QAbstractItemView.InternalMove)
         self.merge_list.setStyleSheet("font-size: 14px;")
@@ -42,19 +60,24 @@ class PagesTab(QWidget, UndoMixin):
         row.addWidget(big_button("➕ Добавить…", self.add_files))
         row.addWidget(big_button("➖ Убрать", self.remove_file))
         v.addLayout(row)
-        v.addWidget(big_button("💾 Объединить и сохранить…", self.do_merge, primary=True))
+        self.btn_merge = big_button("Объединить и сохранить…", self.do_merge, primary=True, icon_name="combine",
+                                    tip="Склеить файлы списка в один новый PDF")
+        v.addWidget(self.btn_merge)
+        self.card_merge = g
         lay.addWidget(g, 1)
 
         # --- редактор страниц ---
         g2 = QGroupBox("Страницы одного PDF")
         v2 = QVBoxLayout(g2)
         top = QHBoxLayout()
-        top.addWidget(big_button("📄 Открыть PDF…", self.open))
-        self.lbl = QLabel("файл не выбран")
-        top.addWidget(self.lbl)
-        top.addStretch()
+        self.dz = DropZone("PDF для правки", "Перетащите сюда PDF или нажмите")
+        self.dz.clicked.connect(self.open)
+        self.dz.files.connect(lambda ps: self.open(ps[0]))
+        top.addWidget(self.dz, 1)
         v2.addLayout(top)
-        v2.addWidget(QLabel("Выделяйте страницы мышью (Ctrl — несколько), перетаскивайте для смены порядка."))
+        hint2 = QLabel("Выделяйте страницы мышью (Ctrl — несколько), перетаскивайте для смены порядка.")
+        hint2.setObjectName("Muted")
+        v2.addWidget(hint2)
         self.grid = QListWidget()
         self.grid.setViewMode(QListWidget.IconMode)
         self.grid.setIconSize(QSize(110, 150))
@@ -67,22 +90,64 @@ class PagesTab(QWidget, UndoMixin):
         self.grid.verticalScrollBar().valueChanged.connect(self.request_thumbs)
         v2.addWidget(self.grid, 1)
         ops = QHBoxLayout()
-        ops.addWidget(big_button("⟳ Повернуть вправо", lambda: self.rotate(90)))
-        ops.addWidget(big_button("⟲ Повернуть влево", lambda: self.rotate(-90)))
-        ops.addWidget(big_button("🗑 Удалить выбранные", self.delete))
+        self.btn_rot = big_button("Вправо", lambda: self.rotate(90), icon_name="rotate-cw",
+                                  tip="Повернуть выделенные страницы по часовой стрелке")
+        ops.addWidget(self.btn_rot)
+        ops.addWidget(big_button("Влево", lambda: self.rotate(-90), icon_name="rotate-ccw",
+                                  tip="Повернуть выделенные страницы против часовой стрелки"))
+        self.btn_del = big_button("Удалить", self.delete, icon_name="trash-2",
+                                  tip="Удалить выделенные страницы (в новом файле)")
+        ops.addWidget(self.btn_del)
         ops.addStretch()
-        ops.addWidget(big_button("💾 Сохранить как новый PDF…", self.save, primary=True))
+        self.btn_save = big_button("Сохранить PDF…", self.save, primary=True, icon_name="save",
+                                   tip="Сохранить изменённые страницы в новый файл. Исходный не меняется")
+        ops.addWidget(self.btn_save)
         v2.addLayout(ops)
         sp = QHBoxLayout()
         sp.addWidget(QLabel("Разделить:"))
         self.ed_ranges = QLineEdit()
         self.ed_ranges.setPlaceholderText("например 1-3, 4-6, 7")
         sp.addWidget(self.ed_ranges)
-        sp.addWidget(big_button("✂ По диапазонам…", self.split_ranges))
-        sp.addWidget(big_button("✂ Каждая страница отдельно…", self.split_every))
+        self.ed_ranges.setToolTip("Номера страниц для каждой части через запятую")
+        self.btn_split = big_button("✂ По диапазонам…", self.split_ranges)
+        sp.addWidget(self.btn_split)
+        sp.addWidget(big_button("Каждая отдельно…", self.split_every, icon_name="scissors",
+                              tip="Сохранить каждую страницу отдельным PDF"))
         v2.addLayout(sp)
         lay.addWidget(g2, 2)
         self.reset_undo()
+
+    # ---------- шаги, подсказка, перетаскивание ----------
+    def step_index(self) -> int:
+        if not (self.doc or self.merge_list.count()):
+            return 0
+        if not self.undo_stack.count() and not self._saved:
+            return 1
+        return 3 if self._saved and not self.is_dirty() else 2
+
+    def accept_files(self, paths: list[str]):
+        if len(paths) > 1:
+            self.add_files(paths)
+        else:
+            self.open(paths[0])
+
+    def tour_steps(self):
+        from .tour import Step
+        return [
+            Step(None, "Работа со страницами", "Слева — объединение нескольких PDF в один. Справа — правка "
+                 "страниц одного файла. Нажимайте «Далее»."),
+            Step(self.dz_merge, "Объединить файлы", "Перетащите сюда несколько PDF (или нажмите и выберите)."),
+            Step(self.merge_list, "Порядок файлов", "Файлы склеятся сверху вниз. Порядок меняйте перетаскиванием."),
+            Step(self.btn_merge, "Сохранить объединённый", "Создаёт один новый PDF из всех файлов списка."),
+            Step(self.dz, "Правка одного PDF", "Откройте файл, страницы которого нужно изменить."),
+            Step(self.grid, "Страницы", "Щёлкните страницу, чтобы выделить (Ctrl — несколько). "
+                 "Перетащите, чтобы поменять порядок."),
+            Step(self.btn_rot, "Повернуть и удалить", "Кнопки работают с выделенными страницами."),
+            Step(self.ed_ranges, "Разделить файл", "Впишите части, например «1-3, 4-6», и нажмите «По диапазонам». "
+                 "Или «Каждая отдельно» — каждая страница станет отдельным файлом."),
+            Step(self.btn_save, "Сохраните", "Новый PDF со всеми изменениями. Исходный файл не меняется. "
+                 "Ctrl + Z отменяет последнее действие."),
+        ]
 
     # --- объединение ---
     def add_files(self, paths=None):
@@ -155,7 +220,9 @@ class PagesTab(QWidget, UndoMixin):
             try:
                 n = pages.merge(paths, out)
                 self.mark_saved()
-                info(self, f"Сохранено: {out}\nВсего страниц: {n}")
+                self._saved = True
+                info(self, f"Готово! Файлы объединены: {os.path.basename(out)}, страниц: {n}",
+                     action=("Открыть папку", lambda: open_folder(out)))
             except Exception as e:  # noqa: BLE001
                 log.exception("Страницы")
                 error(self, str(e))
@@ -166,7 +233,7 @@ class PagesTab(QWidget, UndoMixin):
         if not path:
             return
         self.path, self.doc = path, pymupdf.open(path)
-        self.lbl.setText(f"{os.path.basename(path)} ({len(self.doc)} стр.)")
+        self.dz.set_loaded(f"{os.path.basename(path)} · {len(self.doc)} стр.")
         self.grid.clear()
         self._pix = {}
         if self.loader:
@@ -205,7 +272,9 @@ class PagesTab(QWidget, UndoMixin):
             try:
                 n = pages.rebuild(self.path, order, rot, out)
                 self.mark_saved()
-                info(self, f"Сохранено: {out}\nСтраниц: {n}")
+                self._saved = True
+                info(self, f"Готово! Сохранено страниц: {n}. Файл: {os.path.basename(out)}",
+                     action=("Открыть папку", lambda: open_folder(out)))
             except Exception as e:  # noqa: BLE001
                 log.exception("Страницы")
                 error(self, str(e))
@@ -225,7 +294,8 @@ class PagesTab(QWidget, UndoMixin):
         out_dir = out_dir or self._out_dir()
         if out_dir:
             outs = pages.split(self.path, groups, out_dir)
-            info(self, f"Создано файлов: {len(outs)} в папке {out_dir}")
+            self._saved = True
+            info(self, f"Готово! Создано файлов: {len(outs)}", action=("Открыть папку", lambda: open_folder(out_dir)))
 
     def split_every(self, out_dir: str = ""):
         if not self.doc:
@@ -233,4 +303,5 @@ class PagesTab(QWidget, UndoMixin):
         out_dir = out_dir or self._out_dir()
         if out_dir:
             outs = pages.split_every_page(self.path, out_dir)
-            info(self, f"Создано файлов: {len(outs)} в папке {out_dir}")
+            self._saved = True
+            info(self, f"Готово! Создано файлов: {len(outs)}", action=("Открыть папку", lambda: open_folder(out_dir)))
