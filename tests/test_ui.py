@@ -320,3 +320,49 @@ def test_fragment_needs_files(win):
     n = len(win._toasts)
     f.save("/tmp/never.pdf")          # нечего сохранять — понятное уведомление, без падения
     assert len(win._toasts) == n + 1
+
+
+@pytest.mark.skipif(not os.path.exists(JOB2A), reason="нет job2")
+@pytest.mark.parametrize("scope", ["cur", "all", "sel"])
+@pytest.mark.parametrize("white", [False, True])
+def test_image_screen_position_rotated(win, tmp_path, scope, white):
+    """Картинка стоит ровно там, куда её перетащили, на всех выбранных страницах, в т.ч. повёрнутых."""
+    import numpy as np
+    import pymupdf
+    from app.core.pdfutil import NRect
+    src = str(tmp_path / "rot.pdf")
+    d = pymupdf.open(JOB2A)
+    d[1].set_rotation(90)
+    d[3].set_rotation(270)
+    d.save(src)
+    png = str(tmp_path / "i.png")
+    from PIL import Image
+    Image.new("RGB", (300, 60), (20, 40, 200)).save(png)
+    t = win.image
+    t.open_pdf(src)
+    t.open_image(png)
+    t.chk_white.setChecked(white)
+    t.spin.setValue(2)
+    nr = NRect(0.55, 0.15, 0.85, 0.15 + 0.06)
+    t.view.set_nrect(nr, t.view.boxes["main"].pixmap)
+    {"cur": t.r_cur, "all": t.r_all, "sel": t.r_sel}[scope].setChecked(True)
+    t.ed_pages.setText("2-4")
+    out = str(tmp_path / "o.pdf")
+    t.save(out)
+    exp = set(t.target_pages())
+
+    def rend(p, i):
+        px = p[i].get_pixmap(dpi=40)
+        return np.frombuffer(px.samples, np.uint8).reshape(px.height, px.width, px.n)[..., :3].astype(int)
+    a, b = pymupdf.open(src), pymupdf.open(out)
+    for i in range(len(a)):
+        diff = np.abs(rend(a, i) - rend(b, i)).max(2) > 40
+        if i not in exp:
+            assert not diff.any()
+            continue
+        ys, xs = np.where(diff)
+        H, W = diff.shape
+        assert len(xs) > 20
+        rh = nr.y1 - nr.y0
+        assert xs.min() >= nr.x0 * W - 3 and xs.max() <= nr.x1 * W + 3
+        assert ys.min() >= nr.y0 * H - 3 and ys.max() <= (nr.y0 + rh * 2) * H + 3
