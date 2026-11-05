@@ -88,7 +88,20 @@ class TourOverlay(QWidget):
         self.text.setText(st.text)
         self.b_back.setEnabled(self.i > 0)
         self.b_next.setText("Готово" if self.i == len(self.steps) - 1 else "Далее")
-        QTimer.singleShot(0, self.relayout)   # дать виджету раскрыться
+        QTimer.singleShot(0, self._reveal)    # дать виджету раскрыться
+        self._reveal()
+
+    def _reveal(self):
+        """Прокрутить экран так, чтобы подсвеченный элемент был виден (маленькое окно/крупный шрифт)."""
+        st = self.steps[self.i] if self.steps else None
+        t = st.target if st else None
+        if t is not None and t.isVisible():
+            from PySide6.QtWidgets import QScrollArea
+            p = t.parentWidget()
+            while p is not None and p is not self.host:
+                if isinstance(p, QScrollArea) and p.widget() is not None and p.widget().isAncestorOf(t):
+                    p.ensureWidgetVisible(t, 20, 20)
+                p = p.parentWidget()
         self.relayout()
 
     def next(self):

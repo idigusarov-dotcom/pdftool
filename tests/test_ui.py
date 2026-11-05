@@ -151,11 +151,12 @@ def _screens(win):
     return [win.sign, win.batch, win.fragment, win.sort, win.image, win.pages, win.helppage]
 
 
-def test_tours_reference_real_widgets_and_run(win):
+@pytest.mark.parametrize("size", [(1366, 768), (900, 560)])
+def test_tours_reference_real_widgets_and_run(win, size):
     from PySide6.QtCore import QRect
     from PySide6.QtWidgets import QWidget
     from app.ui.tour import TourOverlay
-    win.resize(1366, 768)
+    win.resize(*size)       # маленькое окно: подсказка должна сама прокрутить экран к элементу
     for scr in _screens(win):
         win.show_screen(scr)
         app.processEvents()
@@ -217,6 +218,25 @@ def test_first_visit_offer_once(win):
     assert len(win._toasts) == n + 1
 
 
+def _sample_pdfs(tmp_path):
+    """Сгенерированные PDF (реальные файлы в репозиторий не кладём). Путь с пробелом и кириллицей —
+    как на Windows-рабочем столе."""
+    import pymupdf
+    d = tmp_path / "Мои документы"
+    d.mkdir()
+    acts, rec = str(d / "акты 1.pdf"), str(d / "расписки 1.pdf")
+    for path, blue in ((acts, True), (rec, False)):
+        doc = pymupdf.open()
+        for k in range(3):
+            pg = doc.new_page(width=595, height=842)
+            pg.insert_text((72, 80), f"Page {k + 1}", fontsize=14)
+            pg.draw_line((72, 700), (300, 700), color=(0, 0, 0))
+            if blue:
+                pg.draw_bezier((90, 690), (140, 640), (190, 740), (260, 680), color=(0.1, 0.2, 0.8), width=2)
+        doc.save(path)
+    return acts, rec
+
+
 def test_steps_toast_dropzone_theme(win, tmp_path):
     from PySide6.QtCore import QMimeData, QPointF, Qt, QUrl
     from PySide6.QtGui import QDropEvent
@@ -224,8 +244,9 @@ def test_steps_toast_dropzone_theme(win, tmp_path):
     from app.ui.widgets import info
     s = win.sign
     assert s.header.steps.state(0) == "active"
+    acts, rec = _sample_pdfs(tmp_path)
     # перетаскивание файлов на зоны
-    for dz, path in ((s.dz_acts, JOB2B), (s.dz_rec, JOB2A)):
+    for dz, path in ((s.dz_acts, acts), (s.dz_rec, rec)):
         md = QMimeData()
         md.setUrls([QUrl.fromLocalFile(path)])
         ev = QDropEvent(QPointF(5, 5), Qt.CopyAction, md, Qt.LeftButton, Qt.NoModifier)
@@ -244,7 +265,7 @@ def test_steps_toast_dropzone_theme(win, tmp_path):
     # перетаскивание на окно уходит текущему экрану
     win.show_screen(win.pages)
     md = QMimeData()
-    md.setUrls([QUrl.fromLocalFile(JOB2A), QUrl.fromLocalFile(JOB2B)])
+    md.setUrls([QUrl.fromLocalFile(rec), QUrl.fromLocalFile(acts)])
     win.dropEvent(QDropEvent(QPointF(5, 5), Qt.CopyAction, md, Qt.LeftButton, Qt.NoModifier))
     assert win.pages.merge_list.count() == 2
     # тема
