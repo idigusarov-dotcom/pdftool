@@ -549,6 +549,7 @@ class PdfApp(QApplication):
         if e.type() == QEvent.FileOpen:
             p = e.file() or e.url().toLocalFile()
             if p:
+                p = os.path.normpath(p)
                 if self.window is not None:
                     self.window.open_files([p])
                 else:

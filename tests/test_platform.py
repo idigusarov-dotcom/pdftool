@@ -63,8 +63,10 @@ def test_data_dir_on_mac(monkeypatch, tmp_path):
     from app.core import logsetup
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))     # expanduser на Windows смотрит сюда
     d = logsetup.log_dir()
-    assert d == os.path.join(str(tmp_path), "Library", "Application Support", "PdfTool") and os.path.isdir(d)
+    want = os.path.join(str(tmp_path), "Library", "Application Support", "PdfTool")
+    assert os.path.normcase(os.path.normpath(d)) == os.path.normcase(want) and os.path.isdir(d)
 
 
 def test_resources_found():
@@ -156,10 +158,10 @@ def test_open_files_from_system(win, tmp_path):
     fake = type("A", (), {})()
     fake.window, fake.pending = None, []
     PdfApp.event(fake, ev)
-    assert fake.pending == [pdf]
+    assert fake.pending == [os.path.normpath(pdf)]
     fake.window = type("W", (), {"open_files": lambda self, ps: got.extend(ps)})()
     PdfApp.event(fake, QFileOpenEvent(QUrl.fromLocalFile(pdf)))
-    assert got == [pdf]
+    assert got == [os.path.normpath(pdf)]
 
 
 def test_stepbar_compacts(win):
