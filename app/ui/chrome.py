@@ -4,8 +4,8 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QPushButton, QToolButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLayout, QPushButton,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from . import style
 
@@ -19,12 +19,15 @@ def _repolish(w: QWidget):
 
 
 class StepBar(QWidget):
-    """«1. Откройте → 2. Проверьте → 3. Сохраните» с состоянием done/active/todo."""
+    """«1. Откройте → 2. Проверьте → 3. Сохраните» с состоянием done/active/todo.
+    В узком окне у неактивных шагов остаются только кружки с номерами (текст — во всплывающей подсказке),
+    чтобы строка шагов не раздвигала окно вбок."""
 
     def __init__(self, steps: list[str], parent=None):
         super().__init__(parent)
         self.setObjectName("StepBar")
         h = QHBoxLayout(self)
+        h.setSizeConstraint(QLayout.SetNoConstraint)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(6)
         self.items: list[QFrame] = []
@@ -42,6 +45,7 @@ class StepBar(QWidget):
             n.setObjectName("StepNum")
             t = QLabel(text)
             t.setObjectName("StepText")
+            f.setToolTip(f"Шаг {i + 1}: {text}")
             fl.addWidget(n)
             fl.addWidget(t)
             h.addWidget(f)
@@ -60,6 +64,43 @@ class StepBar(QWidget):
             f.setProperty("state", st)
             f.findChild(QLabel, "StepNum").setText("✓" if st == "done" else str(i + 1))
             _repolish(f)
+        self._fit()
+
+    def _texts(self):
+        return [f.findChild(QLabel, "StepText") for f in self.items]
+
+    def _full_width(self) -> int:
+        lay = self.layout()
+        w = 0
+        for i in range(lay.count()):
+            it = lay.itemAt(i)
+            wd = it.widget()
+            if wd is None:
+                continue
+            if wd in self.items:
+                fl = wd.layout()
+                m = fl.contentsMargins()
+                w += m.left() + m.right() + fl.spacing() + sum(
+                    wd.findChild(QLabel, n).sizeHint().width() for n in ("StepNum", "StepText"))
+            else:
+                w += wd.sizeHint().width()
+            w += lay.spacing()
+        return w
+
+    def _fit(self):
+        compact = self.width() > 0 and self._full_width() > self.width()
+        for i, t in enumerate(self._texts()):
+            t.setVisible(not compact or self.items[i].property("state") == "active")
+
+    def minimumSizeHint(self):
+        return QSize(min(self._full_width(), 320), super().minimumSizeHint().height())
+
+    def sizeHint(self):
+        return QSize(self._full_width(), super().sizeHint().height())
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit()
 
     def state(self, i: int) -> str:
         return self.items[i].property("state")
@@ -153,6 +194,24 @@ def pdf_paths(mime, exts=(".pdf",)) -> list[str]:
     return out
 
 
+class ElideLabel(QLabel):
+    """Надпись в одну строку, которая в узком окне сокращается многоточием посередине
+    (длинное имя файла не раздвигает окно). text() возвращает полный текст."""
+
+    def minimumSizeHint(self):
+        return QSize(60, super().minimumSizeHint().height())
+
+    def paintEvent(self, e):
+        from PySide6.QtGui import QPainter
+        p = QPainter(self)
+        r = self.contentsRect()
+        p.setPen(self.palette().color(self.foregroundRole()))
+        p.setFont(self.font())
+        p.drawText(r, int(self.alignment()) | Qt.AlignVCenter,
+                   self.fontMetrics().elidedText(self.text(), Qt.ElideMiddle, r.width()))
+        p.end()
+
+
 class DropZone(QFrame):
     """Плашка «Перетащите PDF сюда или нажмите»; после загрузки показывает имя файла."""
     files = Signal(list)
@@ -173,7 +232,7 @@ class DropZone(QFrame):
         h.addWidget(self.ico)
         v = QVBoxLayout()
         v.setSpacing(0)
-        self.t = QLabel(title)
+        self.t = ElideLabel(title)
         self.t.setObjectName("DropTitle")
         self.s = QLabel(hint)
         self.s.setObjectName("DropSub")
@@ -192,6 +251,7 @@ class DropZone(QFrame):
     def set_loaded(self, text: str):
         self.setProperty("loaded", "true" if text else "false")
         self.t.setText(self._title + (": " + text if text else ""))
+        self.t.setToolTip(self.t.text())
         self.s.setText("Чтобы заменить — перетащите другой файл или нажмите" if text else self._hint)
         self.retheme()
         _repolish(self)

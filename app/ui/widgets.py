@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QFileDialog, QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectItem,
                                QGraphicsScene, QGraphicsView, QMessageBox, QPushButton, QWidget)
@@ -224,7 +224,7 @@ class PageView(QGraphicsView):
         self.setScene(QGraphicsScene(self))
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
         from . import style
-        self.setBackgroundBrush(QColor("#3a3f4b" if style.is_dark() else "#e6e9f0"))
+        self.setBackgroundBrush(QColor(style.colors()["page"]))
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.page_item: QGraphicsPixmapItem | None = None
         self.boxes: dict[str, BoxItem] = {}
@@ -292,6 +292,15 @@ class PageView(QGraphicsView):
             e.accept()
             return
         super().wheelEvent(e)
+
+    def viewportEvent(self, e):
+        # щипок двумя пальцами на трекпаде (macOS) — тот же масштаб, что и Ctrl/⌘ + колесо
+        if e.type() == QEvent.NativeGesture and e.gestureType() == Qt.ZoomNativeGesture:
+            f = 1.0 + e.value()
+            if 0.5 < f < 2.0:
+                self.zoom(f)
+            return True
+        return super().viewportEvent(e)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -364,10 +373,28 @@ class PageView(QGraphicsView):
         super().mouseReleaseEvent(e)
 
 
+def card(title: str, hint: str = ""):
+    """Карточка-группа: короткий заголовок и (по желанию) пояснение мелким серым текстом с переносом.
+    Длинный текст в самом заголовке QGroupBox не переносится и раздвигает окно — поэтому так."""
+    from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout
+    g = QGroupBox(title)
+    v = QVBoxLayout(g)
+    v.setContentsMargins(2, 0, 2, 0)       # отступы карточки уже заданы в QSS (padding)
+    v.setSpacing(6)
+    if hint:
+        h = QLabel(hint)
+        h.setObjectName("Hint")
+        h.setWordWrap(True)
+        v.addWidget(h)
+    return g, v
+
+
 def zoom_bar(view: PageView):
     """Небольшая панель масштаба под просмотром страницы."""
+    from PySide6.QtCore import QSize
     from PySide6.QtWidgets import QHBoxLayout, QToolButton
     lay = QHBoxLayout()
+    lay.setSpacing(2)
     from . import style
     for name, tip, fn in (("zoom-out", "Уменьшить", view.zoom_out),
                           ("zoom-in", "Увеличить (или Ctrl + колесо мыши)", view.zoom_in),
@@ -375,8 +402,10 @@ def zoom_bar(view: PageView):
         b = QToolButton()
         b.setIcon(style.icon(name))
         b.setProperty("icon_name", name)
+        b.setIconSize(QSize(16, 16))
         b.setToolTip(tip)
         b.clicked.connect(fn)
         lay.addWidget(b)
+    lay.addSpacing(6)
     lay.addStretch()
     return lay

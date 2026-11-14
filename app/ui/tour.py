@@ -84,8 +84,8 @@ class TourOverlay(QWidget):
         if st.prepare:
             st.prepare()
         self.count.setText(f"Шаг {self.i + 1} из {len(self.steps)}")
-        self.title.setText(st.title)
-        self.text.setText(st.text)
+        self.title.setText(style.key(st.title))
+        self.text.setText(style.key(st.text))
         self.b_back.setEnabled(self.i > 0)
         self.b_next.setText("Готово" if self.i == len(self.steps) - 1 else "Далее")
         QTimer.singleShot(0, self._reveal)    # дать виджету раскрыться

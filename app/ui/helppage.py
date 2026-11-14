@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QTextBrowser, QVBoxLayout, QWidget
 
+from . import style
 from .chrome import ScreenHeader
 
 
@@ -38,7 +39,7 @@ class HelpPage(QWidget):
         return "".join(parts)
 
     def refresh(self):
-        self.text.setHtml(self.html())
+        self.text.setHtml(style.key(self.html()))
 
     def tour_steps(self):
         from .tour import Step

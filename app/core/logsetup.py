@@ -1,4 +1,5 @@
-"""Журнал ошибок: %APPDATA%\\PdfTool\\log.txt (Windows) или ~/.local/share/PdfTool/log.txt."""
+"""Журнал ошибок и данные программы:
+Windows — %APPDATA%\\PdfTool, macOS — ~/Library/Application Support/PdfTool, Linux — ~/.local/share/PdfTool."""
 from __future__ import annotations
 
 import logging
@@ -12,6 +13,8 @@ log = logging.getLogger("pdftool")
 def log_dir() -> str:
     if sys.platform.startswith("win"):
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
     else:
         base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
     d = os.path.join(base, "PdfTool")
@@ -19,7 +22,8 @@ def log_dir() -> str:
         os.makedirs(d, exist_ok=True)
         return d
     except OSError:  # нет прав — рядом с программой
-        d = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "PdfTool_logs")
+        import tempfile   # внутри .app на macOS писать нельзя — во временную папку
+        d = os.path.join(tempfile.gettempdir(), "PdfTool_logs")
         os.makedirs(d, exist_ok=True)
         return d
 

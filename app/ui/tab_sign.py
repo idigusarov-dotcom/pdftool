@@ -6,7 +6,7 @@ import os
 import pymupdf
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPixmap
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QGroupBox, QHBoxLayout,
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QHBoxLayout,
                                QLabel, QProgressDialog, QRadioButton, QScrollArea, QSlider, QSplitter, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -21,7 +21,7 @@ from .infra import UndoMixin, load_rect, run_task, save_rect, settings
 from .chrome import Collapsible, DropZone, ScreenHeader
 from .templbar import TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
-from .widgets import (try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar)
+from .widgets import (try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar, card)
 
 HELP = ("1) Откройте АКТЫ и РАСПИСКИ.  2) Сопоставьте: вручную в таблице или кнопкой «Распознать номера» "
         "(сначала задайте зелёную «зону номера» на акте и на расписке).  3) Красная рамка — откуда берём подпись, "
@@ -86,11 +86,10 @@ class SignTab(QWidget, UndoMixin):
         self.table.verticalScrollBar().valueChanged.connect(self.request_thumbs)
         split.addWidget(self.table)
 
-        g1 = QGroupBox("Акт — откуда взять подпись (красная рамка)")
-        v1 = QVBoxLayout(g1)
+        g1, v1 = card("Акт", "Откуда взять подпись — красная рамка")
         self.view_act = PageView(color="#e53935")
         self.view_act.rectChanged.connect(self.act_rect_changed)
-        v1.addWidget(self.view_act)
+        v1.addWidget(self.view_act, 1)
         v1.addLayout(zoom_bar(self.view_act))
         self.chk_src_own = QCheckBox("Рамка только для этой страницы акта")
         v1.addWidget(self.chk_src_own)
@@ -98,11 +97,10 @@ class SignTab(QWidget, UndoMixin):
         self.card_act = g1
         split.addWidget(g1)
 
-        g2 = QGroupBox("Расписка — куда поставить (синяя рамка)")
-        v2 = QVBoxLayout(g2)
+        g2, v2 = card("Расписка", "Куда поставить подпись — синяя рамка")
         self.view_rec = PageView(color="#1565c0")
         self.view_rec.rectChanged.connect(self.rec_rect_changed)
-        v2.addWidget(self.view_rec)
+        v2.addWidget(self.view_rec, 1)
         v2.addLayout(zoom_bar(self.view_rec))
         self.chk_dst_own = QCheckBox("Рамка только для этой расписки")
         v2.addWidget(self.chk_dst_own)
@@ -157,10 +155,11 @@ class SignTab(QWidget, UndoMixin):
         bottom.addWidget(QLabel("Так будет выглядеть подпись:"))
         self.lbl_ink = QLabel()
         self.lbl_ink.setObjectName("InkPreview")
-        self.lbl_ink.setFixedSize(300, 56)
+        self.lbl_ink.setMinimumSize(160, 56)
+        self.lbl_ink.setMaximumSize(300, 56)
         self.lbl_ink.setAlignment(Qt.AlignCenter)
         self.lbl_ink.setToolTip("Вырезанная подпись из выбранного акта — проверьте, что она целая и без лишнего")
-        bottom.addWidget(self.lbl_ink)
+        bottom.addWidget(self.lbl_ink, 1)
         bottom.addStretch()
         self.btn_preview = big_button("👁 Предпросмотр", self.preview)
         bottom.addWidget(self.btn_preview)
