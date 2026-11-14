@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 
 import numpy as np
-import pymupdf
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGroupBox, QHBoxLayout, QLabel, QListWidget,
@@ -17,7 +16,8 @@ from ..core.pdfutil import NRect, render_page, safe_output_path
 from .chrome import DropZone, ScreenHeader
 from .infra import UndoMixin, settings
 from .thumbs import page_pixmap
-from .widgets import PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, open_folder, zoom_bar
+from .widgets import (PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, open_folder,
+                      try_open_pdf, zoom_bar)
 
 PREVIEW_DPI = 150
 VIEW_DPI = 90
@@ -208,7 +208,10 @@ class FragmentTab(QWidget, UndoMixin):
         path = path or ask_open_pdf(self, "PDF, из которого вырезать")
         if not path:
             return
-        self.src_path, self.src = path, pymupdf.open(path)
+        doc = try_open_pdf(self, path)
+        if doc is None:
+            return
+        self.src_path, self.src = path, doc
         self.dz_src.set_loaded(f"{os.path.basename(path)} · {len(self.src)} стр.")
         self.sp_src.setMaximum(len(self.src))
         self.view_src.clear_boxes()
@@ -218,7 +221,10 @@ class FragmentTab(QWidget, UndoMixin):
         path = path or ask_open_pdf(self, "PDF, в который вставить")
         if not path:
             return
-        self.dst_path, self.dst = path, pymupdf.open(path)
+        doc = try_open_pdf(self, path)
+        if doc is None:
+            return
+        self.dst_path, self.dst = path, doc
         self.dz_dst.set_loaded(f"{os.path.basename(path)} · {len(self.dst)} стр.")
         self.sp_dst.setMaximum(len(self.dst))
         self.placed = []

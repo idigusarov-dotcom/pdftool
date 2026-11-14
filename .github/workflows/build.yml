@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -12,21 +13,43 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-dev.txt -c constraints.txt
       - name: Tests (без реальных PDF часть тестов пропускается)
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q tests
+        run: python -m pytest -q -rs tests
       - name: Build exe
         run: pyinstaller --noconfirm --clean pdftool.spec
+      - name: Smoke test exe (запуск собранного PdfTool.exe, самопроверка, снимок окна)
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "Самопроверка PdfTool"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $p = Start-Process -FilePath "dist\PdfTool.exe" -ArgumentList @("--self-test", "`"$out`"") -PassThru -Wait
+          Write-Host "exit code: $($p.ExitCode)"
+          $json = Join-Path $out "selftest.json"
+          if (Test-Path $json) { Get-Content $json -Encoding utf8 } else { Write-Host "selftest.json не создан" }
+          New-Item -ItemType Directory -Force -Path smoke | Out-Null
+          Copy-Item (Join-Path $out "selftest*") smoke -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { throw "Самопроверка exe не прошла (код $($p.ExitCode))" }
+          $r = Get-Content $json -Raw -Encoding utf8 | ConvertFrom-Json
+          if (-not $r.frozen -or -not $r.ok) { throw "selftest.json: frozen=$($r.frozen) ok=$($r.ok)" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-test
+          path: smoke/
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: PdfTool

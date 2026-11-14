@@ -4,17 +4,16 @@ from __future__ import annotations
 import os
 
 import numpy as np
-import pymupdf
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QRadioButton, QSpinBox,
                                QVBoxLayout, QWidget)
 
 from ..core import imageinsert, pages
 from ..core.logsetup import log
-from ..core.pdfutil import NRect, safe_output_path
+from ..core.pdfutil import NRect, PdfError, safe_output_path
 from .infra import UndoMixin, last_dir, remember_dir
 from .thumbs import page_pixmap
 from .chrome import DropZone, ScreenHeader
-from .widgets import open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar
+from .widgets import try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar
 
 HELP = ("Откройте PDF и картинку (PNG/JPG). Перетащите картинку мышью, размер — синим квадратиком в углу. "
         "Масштаб — Ctrl+колесо. Выберите страницы и нажмите «Сохранить». Ctrl+Z — отменить.")
@@ -134,7 +133,10 @@ class ImageTab(QWidget, UndoMixin):
         self.chk_white.blockSignals(False)
         self.img_path = st["img"]
         if self.img_path:
-            self.img = imageinsert.load_image(self.img_path, st["white"])
+            try:
+                self.img = imageinsert.load_image(self.img_path, st["white"])
+            except PdfError as e:
+                return error(self, str(e))
             if st["rect"] is not None and self.doc:
                 self.view.set_nrect(st["rect"], np_to_pixmap(np.array(self.img)), emit=False)
         else:
@@ -144,7 +146,10 @@ class ImageTab(QWidget, UndoMixin):
     def open_pdf(self, path: str = ""):
         path = path or ask_open_pdf(self)
         if path:
-            self.path, self.doc = path, pymupdf.open(path)
+            doc = try_open_pdf(self, path)
+            if doc is None:
+                return
+            self.path, self.doc = path, doc
             self.spin.setMaximum(len(self.doc))
             self.lbl.setText(f"из {len(self.doc)}")
             self.dz_pdf.set_loaded(f"{os.path.basename(path)} · {len(self.doc)} стр.")
@@ -158,6 +163,11 @@ class ImageTab(QWidget, UndoMixin):
             path, _ = QFileDialog.getOpenFileName(self, "Картинка", last_dir(), "Картинки (*.png *.jpg *.jpeg)")
             remember_dir(path)
         if path:
+            try:
+                imageinsert.load_image(path, False)   # проверка до того, как менять экран
+            except PdfError as e:
+                log.warning("Картинка %s: %s", path, e)
+                return error(self, str(e))
             self.img_path = path
             self.dz_img.set_loaded(os.path.basename(path))
             self.reload_image(initial=True)
@@ -170,7 +180,10 @@ class ImageTab(QWidget, UndoMixin):
     def reload_image(self, initial=False):
         if not self.img_path:
             return
-        self.img = imageinsert.load_image(self.img_path, self.chk_white.isChecked())
+        try:
+            self.img = imageinsert.load_image(self.img_path, self.chk_white.isChecked())
+        except PdfError as e:   # картинку удалили/переместили, пока программа открыта
+            return error(self, str(e))
         if not self.doc:
             return
         pm = np_to_pixmap(np.array(self.img))

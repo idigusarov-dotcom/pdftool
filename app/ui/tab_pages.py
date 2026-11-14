@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 
-import pymupdf
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QVBoxLayout, QWidget)
@@ -17,7 +16,7 @@ from ..core.pdfutil import safe_output_path
 from .infra import UndoMixin, last_dir, remember_dir
 from .thumbs import ThumbLoader, placeholder_icon, visible_rows
 from .chrome import DropZone, ScreenHeader
-from .widgets import open_folder, ask_open_pdf, ask_save, big_button, error, info
+from .widgets import try_open_pdf, open_folder, ask_open_pdf, ask_save, big_button, error, info
 
 
 class PagesTab(QWidget, UndoMixin):
@@ -232,7 +231,10 @@ class PagesTab(QWidget, UndoMixin):
         path = path or ask_open_pdf(self)
         if not path:
             return
-        self.path, self.doc = path, pymupdf.open(path)
+        doc = try_open_pdf(self, path)
+        if doc is None:
+            return
+        self.path, self.doc = path, doc
         self.dz.set_loaded(f"{os.path.basename(path)} · {len(self.doc)} стр.")
         self.grid.clear()
         self._pix = {}
@@ -293,7 +295,11 @@ class PagesTab(QWidget, UndoMixin):
             return error(self, str(e))
         out_dir = out_dir or self._out_dir()
         if out_dir:
-            outs = pages.split(self.path, groups, out_dir)
+            try:
+                outs = pages.split(self.path, groups, out_dir)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Разделение")
+                return error(self, str(e))
             self._saved = True
             info(self, f"Готово! Создано файлов: {len(outs)}", action=("Открыть папку", lambda: open_folder(out_dir)))
 
@@ -302,6 +308,10 @@ class PagesTab(QWidget, UndoMixin):
             return error(self, "Сначала откройте PDF.")
         out_dir = out_dir or self._out_dir()
         if out_dir:
-            outs = pages.split_every_page(self.path, out_dir)
+            try:
+                outs = pages.split_every_page(self.path, out_dir)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Разделение")
+                return error(self, str(e))
             self._saved = True
             info(self, f"Готово! Создано файлов: {len(outs)}", action=("Открыть папку", lambda: open_folder(out_dir)))

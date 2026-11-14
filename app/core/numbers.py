@@ -5,10 +5,9 @@ import math
 from typing import Callable, Optional, Sequence
 
 import numpy as np
-import pymupdf
 
 from .digits import DigitResult, read_best
-from .pdfutil import NRect, render_page
+from .pdfutil import NRect, render_page, open_pdf
 
 OCR_DPI = 150
 
@@ -22,7 +21,7 @@ def read_document(path: str, zones: Sequence[NRect], mode: str = "blue", sensiti
     detected — сюда кладётся результат определения шаблона по каждой странице."""
     from . import templates as tp
     out: list[DigitResult] = []
-    with pymupdf.open(path) as doc:
+    with open_pdf(path) as doc:
         idx = list(pages) if pages is not None else list(range(len(doc)))
         for k, i in enumerate(idx):
             if progress and progress(k, len(idx)) is False:

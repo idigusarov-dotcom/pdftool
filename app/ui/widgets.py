@@ -92,11 +92,34 @@ def ask_open_pdf(parent: QWidget, title="Выберите PDF") -> str:
     return p
 
 
+def with_ext(path: str, flt: str) -> str:
+    """Если имя ввели без расширения — добавить его из фильтра («PDF (*.pdf)» → .pdf)."""
+    import os
+    import re
+    m = re.search(r"\*(\.\w+)", flt or "")
+    if path and m and not os.path.splitext(path)[1]:
+        return path + m.group(1)
+    return path
+
+
 def ask_save(parent: QWidget, suggested: str, flt="PDF (*.pdf)") -> str:
     from .infra import remember_dir
     p, _ = QFileDialog.getSaveFileName(parent, "Сохранить как", suggested, flt)
+    p = with_ext(p, flt)
     remember_dir(p)
     return p
+
+
+def try_open_pdf(parent: QWidget, path: str):
+    """Открыть PDF; если нельзя (пустой, битый, с паролем) — понятное уведомление и None."""
+    from ..core.logsetup import log
+    from ..core.pdfutil import PdfError, open_pdf
+    try:
+        return open_pdf(path)
+    except PdfError as e:
+        log.warning("Не открылся %s: %s", path, e)
+        error(parent, str(e))
+        return None
 
 
 def open_folder(path: str):

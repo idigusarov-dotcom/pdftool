@@ -94,8 +94,13 @@ class TemplateBar(QWidget):
         if tp.get(name) is not None and name != self.current_name():
             if QMessageBox.question(self, "Шаблон уже есть", f"Заменить шаблон «{name}»?") != QMessageBox.Yes:
                 return
-        t = self.capture(name)
-        tp.save(t)
+        try:
+            t = self.capture(name)
+            tp.save(t)
+        except Exception as e:  # noqa: BLE001
+            from ..core.logsetup import log
+            log.exception("Сохранение шаблона")
+            return error(self, f"Не удалось сохранить шаблон: {e}")
         self.reload(name)
         self.changed.emit()
         info(self, f"Шаблон «{name}» сохранён.")
@@ -133,7 +138,10 @@ class TemplateBar(QWidget):
                                               "Шаблон PdfTool (*.json)")
         if path:
             remember_dir(path)
-            tp.export_to(tp.get(name), path)
+            try:
+                tp.export_to(tp.get(name), path)
+            except OSError as e:
+                return error(self, f"Не удалось сохранить файл шаблона: {e.strerror or e}")
             info(self, f"Шаблон сохранён в файл: {path}")
 
     def import_(self, path: str = ""):

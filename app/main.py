@@ -357,6 +357,9 @@ def setup_app(app):
 
 
 def main() -> int:
+    if len(sys.argv) >= 2 and sys.argv[1] == "--self-test":   # проверка сборки (CI, поддержка)
+        from .selftest import run
+        return run(sys.argv[2] if len(sys.argv) > 2 else os.getcwd())
     setup_logging()
     log.info("Запуск %s %s", APP_NAME, __version__)
     install_excepthook()

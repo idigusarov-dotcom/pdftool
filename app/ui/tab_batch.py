@@ -230,8 +230,9 @@ class BatchTab(QWidget, UndoMixin):
         if not (0 <= r < len(self.items)) or self.sign is None:
             return error(self, "Выберите пару в таблице.")
         it = self.items[r]
-        self.sign.load_pair(it.acts_path, it.receipts_path, it.template, it.mapping,
-                            it.src_overrides, it.dst_overrides)
+        if not self.sign.load_pair(it.acts_path, it.receipts_path, it.template, it.mapping,
+                                   it.src_overrides, it.dst_overrides):
+            return   # причина уже показана уведомлением
         self._review_row = r
         self.show_sign()
 
