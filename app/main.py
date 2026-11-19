@@ -18,6 +18,7 @@ from .ui.chrome import Collapsible, DropZone, Toast, pdf_paths
 from .ui.helppage import HelpPage
 from .ui.infra import settings
 from .ui.tab_batch import BatchTab
+from .ui.tab_compress import CompressTab
 from .ui.tab_fragment import FragmentTab
 from .ui.tour import TourOverlay
 from .ui.tab_image import ImageTab
@@ -36,6 +37,7 @@ SCREENS = [("sign", "Подписи", "pen-tool", "Перенос подписе
            ("sort", "Сортировка", "list-ordered", "Разложить страницы по номерам квартир"),
            ("image", "Картинка", "image", "Поставить печать или подпись-картинку"),
            ("pages", "Страницы", "files", "Объединить, повернуть, удалить, разделить"),
+           ("compress", "Сжатие", "file-down", "Уменьшить PDF со сканами для отправки по почте"),
            ("help", "Справка", "book-open-check", "Как пользоваться программой")]
 
 
@@ -76,13 +78,15 @@ class MainWindow(QMainWindow):
         self.sort = SortTab()
         self.image = ImageTab()
         self.pages = PagesTab()
+        self.compress = CompressTab()
         self.fragment = FragmentTab()
         self.batch = BatchTab(self.sign, lambda: self.show_screen(self.sign))
         for bar in (self.sign.tbar, self.sort.tbar):
             bar.changed.connect(self.templates_changed)
         self.helppage = HelpPage([("Подписи", self.sign), ("Пакет", self.batch),
                                   ("Фрагменты (вырезать и перенести)", self.fragment), ("Сортировка", self.sort),
-                                  ("Картинка", self.image), ("Страницы", self.pages)], self.start_tour)
+                                  ("Картинка", self.image), ("Страницы", self.pages),
+                                  ("Сжатие", self.compress)], self.start_tour)
 
         # Каркас как в приложениях macOS: слева боковая панель на всю высоту (название, разделы),
         # справа — строка инструментов и сам экран.
@@ -293,7 +297,7 @@ class MainWindow(QMainWindow):
                 w.setTitle(style.key(w.title()))
 
     def all_tabs(self):
-        return [self.sign, self.batch, self.fragment, self.sort, self.image, self.pages]
+        return [self.sign, self.batch, self.fragment, self.sort, self.image, self.pages, self.compress]
 
     def show_screen(self, w):
         self.tabs.setCurrentWidget(w)
@@ -515,7 +519,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         names = {self.sign: "Подписи", self.batch: "Пакет", self.sort: "Сортировка", self.image: "Картинка",
-                 self.pages: "Страницы", self.fragment: "Фрагменты"}
+                 self.pages: "Страницы", self.fragment: "Фрагменты", self.compress: "Сжатие"}
         dirty = [names[t] for t in self.all_tabs() if t.is_dirty()]
         if dirty:
             ans = QMessageBox.question(

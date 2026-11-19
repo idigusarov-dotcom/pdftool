@@ -15,13 +15,13 @@ from ..core import templates as tp
 from ..core import signatures as sig
 from ..core.ink import INK_MODES
 from ..core.logsetup import log
-from ..core.pdfutil import NRect, safe_output_path
+from ..core.pdfutil import Cancelled, NRect, safe_output_path
 from . import style
 from .infra import UndoMixin, load_rect, run_task, save_rect, settings
 from .chrome import Collapsible, DropZone, ScreenHeader
 from .templbar import TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
-from .widgets import (try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar, card)
+from .widgets import (try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar, card, progress_window)
 
 HELP = ("1) Откройте АКТЫ и РАСПИСКИ.  2) Сопоставьте: вручную в таблице или кнопкой «Распознать номера» "
         "(сначала задайте зелёную «зону номера» на акте и на расписке).  3) Красная рамка — откуда берём подпись, "
@@ -611,13 +611,13 @@ class SignTab(QWidget, UndoMixin):
         if not out:
             return
         try:
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            rep = sig.apply_transfer(self.job, out)
+            with progress_window(self, "Переношу подписи в расписки…") as prog:
+                rep = sig.apply_transfer(self.job, out, progress=prog)
+        except Cancelled:
+            return info(self, "Отменено — новый файл не создан.")
         except Exception as e:  # noqa: BLE001
-            QApplication.restoreOverrideCursor()
             log.exception("Сохранение подписей")
             return error(self, str(e))
-        QApplication.restoreOverrideCursor()
         self.mark_saved()
         self._saved = True
         msg = (f"Готово! Сохранён файл {os.path.basename(out)}.\nПодписей поставлено: {len(rep['placed'])}, "

@@ -183,7 +183,9 @@ class BatchTab(QWidget, UndoMixin):
             if st.startswith("готово") and "без подписи" not in st:
                 si.setBackground(style.mark("#c8e6c9"))
             elif st:
-                si.setBackground(style.mark("#ffe082") if st.startswith("готово") else style.mark("#ffcdd2"))
+                warn = st.startswith("готово") or st.startswith("проверьте")
+                si.setBackground(style.mark("#ffe082") if warn else style.mark("#ffcdd2"))
+                si.setToolTip(st)
             self.table.setItem(r, C_STAT, si)
         self._filling = False
 
@@ -311,6 +313,11 @@ class BatchTab(QWidget, UndoMixin):
             return "отменено (файл не создан)"
         if res["status"] == "skipped":
             return "не обработано (отмена)"
+        if not res["placed"]:
+            # файл создан, но подписей в нём нет — это не «готово», а повод проверить рамки
+            if res["empty_ink"]:
+                return f"проверьте рамки: подписей 0 (пустая рамка на {len(res['empty_ink'])} стр.)"
+            return "проверьте сопоставление: подписей 0 (все расписки — «не ставить»)"
         s = f"готово: подписей {res['placed']}"
         if res["blank"]:
             s += f", пустых {len(res['blank'])}"
@@ -327,18 +334,34 @@ class BatchTab(QWidget, UndoMixin):
             if res["status"] == "ok":
                 lines.append(f"    → {res['out']}")
         ok = sum(r["status"] == "ok" for r in results)
-        return f"Обработано пар: {ok} из {len(results)}\n\n" + "\n".join(lines)
+        head = f"Обработано пар: {ok} из {len(results)}"
+        zero = [r["pair"] + 1 for r in results if r["status"] == "ok" and not r["placed"]]
+        if zero:
+            head += (f"\n\n⚠ Без единой подписи: пары {', '.join(map(str, zero))}. Скорее всего красная рамка "
+                     "(откуда брать подпись) не попала на подпись в актах. Выделите пару и нажмите "
+                     "«Проверить во вкладке «Подписи»», поправьте рамку и обработайте снова.")
+        return head + "\n\n" + "\n".join(lines)
 
     def show_summary(self, results):
         dlg = QDialog(self)
         dlg.setWindowTitle("Итог пакетной обработки")
         dlg.resize(760, 420)
         v = QVBoxLayout(dlg)
+        zero = [r["pair"] + 1 for r in results if r["status"] == "ok" and not r["placed"]]
+        self._summary_warn = None
+        if zero:
+            w = QLabel(f"Проверьте рамки: в {'паре' if len(zero) == 1 else 'парах'} {', '.join(map(str, zero))} "
+                       "не поставлено ни одной подписи.")
+            w.setObjectName("WarnBanner")
+            w.setWordWrap(True)
+            v.addWidget(w)
+            self._summary_warn = w
         te = QTextEdit()
         te.setReadOnly(True)
         te.setPlainText(self.summary_text(results))
         v.addWidget(te)
         bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.button(QDialogButtonBox.Close).setText("Закрыть")
         b = bb.addButton("📂 Открыть папку результатов", QDialogButtonBox.ActionRole)
         b.clicked.connect(self.open_folder)
         bb.rejected.connect(dlg.reject)

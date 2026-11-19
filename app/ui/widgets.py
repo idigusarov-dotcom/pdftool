@@ -110,18 +110,46 @@ def ask_save(parent: QWidget, suggested: str, flt="PDF (*.pdf)") -> str:
     return p
 
 
-class busy:
-    """Песочные часы на время долгой операции в окне (сохранение большого PDF и т. п.)."""
+class progress_window:
+    """Окно «идёт работа» с полосой и кнопкой «Отмена» для долгих сохранений в окне программы.
+
+        with progress_window(self, "Ставлю картинку на страницы…") as prog:
+            core_function(..., progress=prog)      # prog(i, n); при «Отмене» бросает Cancelled
+
+    Окно появляется, только если работа идёт дольше полсекунды; пока оно открыто, остальное окно
+    программы недоступно (нельзя нажать «Сохранить» второй раз), но перерисовывается — не «зависает»."""
+
+    def __init__(self, parent: QWidget, text: str):
+        self.parent, self.text, self.dlg = parent, text, None
 
     def __enter__(self):
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QProgressDialog
+        self.dlg = QProgressDialog(self.text, "Отмена", 0, 100, self.parent)
+        self.dlg.setWindowTitle("Подождите")
+        self.dlg.setWindowModality(Qt.WindowModal)
+        self.dlg.setMinimumDuration(500)
+        self.dlg.setAutoClose(False)
+        self.dlg.setAutoReset(False)
+        self.dlg.setMinimumWidth(360)
+        self.dlg.setValue(0)
         QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()
         return self
+
+    def __call__(self, i: int, n: int):
+        from PySide6.QtWidgets import QApplication
+        from ..core.pdfutil import Cancelled
+        if n:
+            self.dlg.setLabelText(f"{self.text}\n{min(i, n)} из {n}")
+            self.dlg.setValue(int(100 * min(i, n) / n))
+        QApplication.processEvents()
+        if self.dlg.wasCanceled():
+            raise Cancelled()
 
     def __exit__(self, *exc):
         from PySide6.QtWidgets import QApplication
         QApplication.restoreOverrideCursor()
+        self.dlg.close()
+        self.dlg.deleteLater()
         return False
 
 

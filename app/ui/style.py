@@ -269,6 +269,8 @@ QMenu::separator {{ height: 1px; background: {c['border']}; margin: 4px 8px; }}
 #TourText {{ font-size: 13px; }}
 #TourCount {{ color: {c['muted']}; }}
 #Muted {{ color: {c['muted']}; }}
+#WarnBanner {{ background: {c['warn_soft']}; color: {c['text']}; border: 1px solid {c['warn']};
+    border-radius: 10px; padding: 10px 12px; font-weight: 600; }}
 #Hint {{ color: {c['muted']}; font-size: 12px; font-weight: 400; }}
 #InkPreview {{ background: white; border: 1px solid {c['border']}; border-radius: 8px; }}
 """
