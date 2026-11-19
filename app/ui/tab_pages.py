@@ -156,9 +156,16 @@ class PagesTab(QWidget, UndoMixin):
             paths, _ = QFileDialog.getOpenFileNames(self, "PDF для объединения", last_dir(), "PDF (*.pdf)")
             if paths:
                 remember_dir(paths[0])
+        added = 0
         for p in paths or []:
+            doc = try_open_pdf(self, p)      # пароль, битый, пустой — сразу понятное сообщение
+            if doc is None:
+                continue
+            doc.close()
             self._add_merge_item(p)
-        self.commit("добавить файлы")
+            added += 1
+        if added:
+            self.commit("добавить файлы")
 
     def _add_merge_item(self, p):
         it = QListWidgetItem(os.path.basename(p))

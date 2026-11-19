@@ -8,7 +8,7 @@ from dataclasses import asdict
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel,
-                               QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
+                               QProgressBar, QPushButton, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
                                QWidget)
 
 from ..core import batch
@@ -25,6 +25,18 @@ HELP = ("Пакетный режим: добавьте несколько пар
         "нажмите «Проверить во вкладке «Подписи»», поправьте таблицу и вернитесь — «Взять сопоставление». "
         "Затем «Обработать все». Исходные файлы никогда не перезаписываются.")
 C_N, C_ACTS, C_REC, C_TPL, C_OUT, C_MAP, C_STAT = range(7)
+
+
+class _MiddleElide(QStyledItemDelegate):
+    """Путь результата сокращается посередине: «/Users/…/Расписки_с_подписями.pdf» — имя файла видно."""
+
+    def paint(self, painter, option, index):
+        from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = opt.fontMetrics.elidedText(opt.text, Qt.ElideMiddle, max(20, opt.rect.width() - 12))
+        w = opt.widget
+        (w.style() if w else QApplication.style()).drawControl(QStyle.CE_ItemViewItem, opt, painter, w)
 
 
 class BatchTab(QWidget, UndoMixin):
@@ -59,6 +71,8 @@ class BatchTab(QWidget, UndoMixin):
         top.addStretch()
         lay.addLayout(top)
         self.table = QTableWidget(0, 7)
+        self.table.setTextElideMode(Qt.ElideMiddle)     # длинный путь: видно и начало, и имя файла
+        self.table.setItemDelegateForColumn(C_OUT, _MiddleElide(self.table))
         self.table.setHorizontalHeaderLabels(["№", "Акты", "Расписки", "Шаблон", "Результат", "Сопоставление", "Итог"])
         for c, w in ((C_N, 36), (C_ACTS, 150), (C_REC, 150), (C_TPL, 170), (C_OUT, 210), (C_MAP, 115)):
             self.table.setColumnWidth(c, w)

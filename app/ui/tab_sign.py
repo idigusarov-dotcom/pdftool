@@ -224,6 +224,9 @@ class SignTab(QWidget, UndoMixin):
     def rebuild(self):
         if not (self.acts and self.rec):
             return
+        from ..core.pdfutil import same_file
+        if same_file(self.acts_path, self.rec_path):
+            error(self, "Акты и расписки — один и тот же файл. Проверьте, что открыли нужные файлы.")
         self._reviewed = self._saved = False
         self._loading = True
         s = settings()

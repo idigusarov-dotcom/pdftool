@@ -110,6 +110,21 @@ def ask_save(parent: QWidget, suggested: str, flt="PDF (*.pdf)") -> str:
     return p
 
 
+class busy:
+    """Песочные часы на время долгой операции в окне (сохранение большого PDF и т. п.)."""
+
+    def __enter__(self):
+        from PySide6.QtWidgets import QApplication
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
+        return self
+
+    def __exit__(self, *exc):
+        from PySide6.QtWidgets import QApplication
+        QApplication.restoreOverrideCursor()
+        return False
+
+
 def try_open_pdf(parent: QWidget, path: str):
     """Открыть PDF; если нельзя (пустой, битый, с паролем) — понятное уведомление и None."""
     from ..core.logsetup import log

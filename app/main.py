@@ -312,6 +312,7 @@ class MainWindow(QMainWindow):
             w.undo_stack.redo()
 
     def _screen_changed(self, i):
+        self.clear_toasts()          # уведомления прошлого экрана здесь уже не к месту
         key = SCREENS[i][0]
         self.nav[key].setChecked(True)
         self.refresh_steps()
@@ -360,9 +361,29 @@ class MainWindow(QMainWindow):
         log.info("Уведомление: %s", text.replace("\n", " "))
         return t
 
+    def _toast_bottom(self, host) -> int:
+        """Нижний край стопки уведомлений: над кнопками внизу экрана («Сохранить…», «Обработать все»),
+        чтобы уведомление не закрывало главную кнопку."""
+        y = host.height() - 18
+        w = self.current()
+        if w is None:
+            return y
+        for b in w.findChildren(QPushButton):
+            if b.isVisibleTo(w) and b.property("kind") == "primary":
+                top = b.mapTo(host, b.rect().topLeft()).y()
+                if top > host.height() * 0.55:          # только кнопки в нижней части экрана
+                    y = min(y, top - 12)
+        return y
+
+    def clear_toasts(self):
+        for t in list(self._toasts):
+            t.close_now()
+
     def place_toasts(self):
         host = self.centralWidget()
-        y = host.height() - 18
+        while len(self._toasts) > 3:            # не больше трёх сразу — старые убираем
+            self._toasts[0].close_now()
+        y = self._toast_bottom(host)
         for t in reversed(self._toasts):
             t.adjustSize()
             y -= t.height()

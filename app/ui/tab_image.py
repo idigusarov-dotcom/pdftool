@@ -13,7 +13,7 @@ from ..core.pdfutil import NRect, PdfError, safe_output_path
 from .infra import UndoMixin, last_dir, remember_dir
 from .thumbs import page_pixmap
 from .chrome import DropZone, ScreenHeader
-from .widgets import try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar
+from .widgets import try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar, busy
 
 HELP = ("Откройте PDF и картинку (PNG/JPG). Перетащите картинку мышью, размер — синим квадратиком в углу. "
         "Масштаб — Ctrl+колесо. Выберите страницы и нажмите «Сохранить». Ctrl+Z — отменить.")
@@ -204,7 +204,8 @@ class ImageTab(QWidget, UndoMixin):
         if self.r_all.isChecked():
             return list(range(n))
         if self.r_sel.isChecked():
-            return [i for g in pages.parse_ranges(self.ed_pages.text(), n) for i in g]
+            # «1-3, 2» — вторая страница один раз (иначе картинка легла бы на неё дважды)
+            return sorted({i for g in pages.parse_ranges(self.ed_pages.text(), n) for i in g})
         return [self.spin.value() - 1]
 
     def save(self, out: str = ""):
@@ -214,7 +215,8 @@ class ImageTab(QWidget, UndoMixin):
             tp = self.target_pages()
             out = out or ask_save(self, safe_output_path(self.path, "с_картинкой"))
             if out:
-                imageinsert.insert_image(self.path, self.img, self.view.get_nrect(), tp, out)
+                with busy():
+                    imageinsert.insert_image(self.path, self.img, self.view.get_nrect(), tp, out)
                 self.mark_saved()
                 self._saved = True
                 info(self, f"Готово! Картинка поставлена на {len(tp)} стр. Файл: {os.path.basename(out)}",
