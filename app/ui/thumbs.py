@@ -75,9 +75,13 @@ class ThumbLoader(QObject):
                 arr = np.ascontiguousarray(render_page(doc, i, self.dpi))
                 h, w = arr.shape[:2]
                 img = QImage(arr.data, w, h, 3 * w, QImage.Format_RGB888).copy()
-                self.ready.emit(self.path, i, img)
             except Exception:  # noqa: BLE001
                 log.exception("Миниатюра стр. %s", i)
+                continue
+            try:
+                self.ready.emit(self.path, i, img)
+            except RuntimeError:   # окно уже закрыто (объект-источник сигнала удалён) — просто выходим
+                break
         doc.close()
 
 

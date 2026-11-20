@@ -1,4 +1,4 @@
-name: build-exe
+name: build
 
 on:
   push:
@@ -11,6 +11,25 @@ permissions:
   contents: write   # создание релиза по тегу
 
 jobs:
+  linux-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Qt libs
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -c constraints.txt
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q -rs tests
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -29,7 +48,7 @@ jobs:
         run: python -m pytest -q -rs tests
       - name: Build exe
         run: pyinstaller --noconfirm --clean pdftool.spec
-      - name: Smoke test exe (запуск собранного PdfTool.exe, самопроверка, снимок окна)
+      - name: Smoke test exe (запуск собранного PdfTool.exe, самопроверка, снимки окна)
         shell: pwsh
         timeout-minutes: 5
         run: |
@@ -47,15 +66,90 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: smoke-test
+          name: smoke-windows
           path: smoke/
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
-          name: PdfTool
+          name: PdfTool-windows
           path: dist/PdfTool.exe
-      - name: Release (для тегов v*)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+
+  macos:
+    name: macos-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15         # Apple Silicon (M1…M4)
+            arch: arm64
+          - runner: macos-15-intel   # Intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      PY: /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+      PDFTOOL_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Python 3.12 с python.org (собран для macOS 10.13+, чтобы программа шла не только на новейшей macOS)
+        run: |
+          curl -fsSLo /tmp/python.pkg https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg
+          sudo installer -pkg /tmp/python.pkg -target /
+          "$PY" -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # numpy: колесо для macOS 11+, а не для 14+ (pip по умолчанию берёт самое новое под раннер)
+          plat=$([ "$PDFTOOL_ARCH" = arm64 ] && echo macosx_11_0_arm64 || echo macosx_10_13_x86_64)
+          pip download --only-binary=:all: --no-deps --platform "$plat" --python-version 3.12 -d wheels \
+            "numpy==$(grep '^numpy==' constraints-macos.txt | cut -d= -f3)"
+          pip install wheels/numpy-*.whl
+          pip install -r requirements-dev.txt -c constraints-macos.txt
+          pip install dmgbuild -c constraints-macos.txt
+          python -c "import platform, PySide6, pymupdf, numpy; print(platform.machine(), platform.mac_ver()[0], PySide6.__version__, pymupdf.VersionBind, numpy.__version__)"
+      - name: Tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q -rs tests
+      - name: Build PdfTool.app
+        run: |
+          pyinstaller --noconfirm --clean pdftool.spec
+          ls -la dist dist/PdfTool.app/Contents
+      - name: Sign + dmg
+        run: |
+          VER=$(python -c "import app; print(app.__version__)")
+          NAME=$([ "$PDFTOOL_ARCH" = arm64 ] && echo AppleSilicon || echo Intel)
+          DMG="dist/PdfTool-$VER-mac-$NAME.dmg"
+          tools/make_dmg.sh "$DMG"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+      - name: Smoke test (dmg → «Программы» → запуск, самопроверка, снимки экрана)
+        timeout-minutes: 10
+        run: tools/mac_smoke.sh "$DMG" "$PDFTOOL_ARCH" smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          files: dist/PdfTool.exe
+          name: smoke-macos-${{ matrix.arch }}
+          path: smoke/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PdfTool-macos-${{ matrix.arch }}
+          path: dist/*.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux-tests, windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: PdfTool-*
+          path: out
+          merge-multiple: true
+      - run: ls -la out
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}

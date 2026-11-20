@@ -107,6 +107,8 @@ def apply_transfer(job: TransferJob, out_path: str,
             dst = job.dst_overrides.get(i, job.dst_rect).to_points(page.rect)
             _place(page, rgba, src.to_points(acts[a].rect), dst, job.trim_left)
             report["placed"].append((i, a))
+        if progress:
+            progress(len(rec), len(rec))
         save_doc(rec, out_path, inputs=(job.acts_path, job.receipts_path))
     finally:
         rec.close()

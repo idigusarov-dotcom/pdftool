@@ -1,0 +1,12 @@
+# Версии для сборки под macOS (Apple Silicon и Intel). Отличаются от constraints.txt (Windows):
+#  * PyMuPDF 2.x выпускается для Mac только под Apple Silicon, а 1.28.2 — и под Intel, и под M1/M2/M3/M4;
+#  * PySide6 6.9 работает на macOS 12 Monterey и новее (6.12 требует macOS 14).
+# Обе версии проходят все тесты проекта.
+PySide6-Essentials==6.9.3
+shiboken6==6.9.3
+PyMuPDF==1.28.2
+numpy==2.5.4
+Pillow==13.0.0
+pyinstaller==6.22.3
+pytest==9.2.0
+dmgbuild==1.6.7

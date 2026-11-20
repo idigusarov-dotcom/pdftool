@@ -8,7 +8,7 @@ from dataclasses import asdict
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QLabel,
-                               QProgressBar, QPushButton, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
+                               QProgressBar, QPushButton, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
                                QWidget)
 
 from ..core import batch
@@ -25,6 +25,18 @@ HELP = ("Пакетный режим: добавьте несколько пар
         "нажмите «Проверить во вкладке «Подписи»», поправьте таблицу и вернитесь — «Взять сопоставление». "
         "Затем «Обработать все». Исходные файлы никогда не перезаписываются.")
 C_N, C_ACTS, C_REC, C_TPL, C_OUT, C_MAP, C_STAT = range(7)
+
+
+class _MiddleElide(QStyledItemDelegate):
+    """Путь результата сокращается посередине: «/Users/…/Расписки_с_подписями.pdf» — имя файла видно."""
+
+    def paint(self, painter, option, index):
+        from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = opt.fontMetrics.elidedText(opt.text, Qt.ElideMiddle, max(20, opt.rect.width() - 12))
+        w = opt.widget
+        (w.style() if w else QApplication.style()).drawControl(QStyle.CE_ItemViewItem, opt, painter, w)
 
 
 class BatchTab(QWidget, UndoMixin):
@@ -59,6 +71,8 @@ class BatchTab(QWidget, UndoMixin):
         top.addStretch()
         lay.addLayout(top)
         self.table = QTableWidget(0, 7)
+        self.table.setTextElideMode(Qt.ElideMiddle)     # длинный путь: видно и начало, и имя файла
+        self.table.setItemDelegateForColumn(C_OUT, _MiddleElide(self.table))
         self.table.setHorizontalHeaderLabels(["№", "Акты", "Расписки", "Шаблон", "Результат", "Сопоставление", "Итог"])
         for c, w in ((C_N, 36), (C_ACTS, 150), (C_REC, 150), (C_TPL, 170), (C_OUT, 210), (C_MAP, 115)):
             self.table.setColumnWidth(c, w)
@@ -169,7 +183,9 @@ class BatchTab(QWidget, UndoMixin):
             if st.startswith("готово") and "без подписи" not in st:
                 si.setBackground(style.mark("#c8e6c9"))
             elif st:
-                si.setBackground(style.mark("#ffe082") if st.startswith("готово") else style.mark("#ffcdd2"))
+                warn = st.startswith("готово") or st.startswith("проверьте")
+                si.setBackground(style.mark("#ffe082") if warn else style.mark("#ffcdd2"))
+                si.setToolTip(st)
             self.table.setItem(r, C_STAT, si)
         self._filling = False
 
@@ -297,6 +313,11 @@ class BatchTab(QWidget, UndoMixin):
             return "отменено (файл не создан)"
         if res["status"] == "skipped":
             return "не обработано (отмена)"
+        if not res["placed"]:
+            # файл создан, но подписей в нём нет — это не «готово», а повод проверить рамки
+            if res["empty_ink"]:
+                return f"проверьте рамки: подписей 0 (пустая рамка на {len(res['empty_ink'])} стр.)"
+            return "проверьте сопоставление: подписей 0 (все расписки — «не ставить»)"
         s = f"готово: подписей {res['placed']}"
         if res["blank"]:
             s += f", пустых {len(res['blank'])}"
@@ -313,18 +334,34 @@ class BatchTab(QWidget, UndoMixin):
             if res["status"] == "ok":
                 lines.append(f"    → {res['out']}")
         ok = sum(r["status"] == "ok" for r in results)
-        return f"Обработано пар: {ok} из {len(results)}\n\n" + "\n".join(lines)
+        head = f"Обработано пар: {ok} из {len(results)}"
+        zero = [r["pair"] + 1 for r in results if r["status"] == "ok" and not r["placed"]]
+        if zero:
+            head += (f"\n\n⚠ Без единой подписи: пары {', '.join(map(str, zero))}. Скорее всего красная рамка "
+                     "(откуда брать подпись) не попала на подпись в актах. Выделите пару и нажмите "
+                     "«Проверить во вкладке «Подписи»», поправьте рамку и обработайте снова.")
+        return head + "\n\n" + "\n".join(lines)
 
     def show_summary(self, results):
         dlg = QDialog(self)
         dlg.setWindowTitle("Итог пакетной обработки")
         dlg.resize(760, 420)
         v = QVBoxLayout(dlg)
+        zero = [r["pair"] + 1 for r in results if r["status"] == "ok" and not r["placed"]]
+        self._summary_warn = None
+        if zero:
+            w = QLabel(f"Проверьте рамки: в {'паре' if len(zero) == 1 else 'парах'} {', '.join(map(str, zero))} "
+                       "не поставлено ни одной подписи.")
+            w.setObjectName("WarnBanner")
+            w.setWordWrap(True)
+            v.addWidget(w)
+            self._summary_warn = w
         te = QTextEdit()
         te.setReadOnly(True)
         te.setPlainText(self.summary_text(results))
         v.addWidget(te)
         bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.button(QDialogButtonBox.Close).setText("Закрыть")
         b = bb.addButton("📂 Открыть папку результатов", QDialogButtonBox.ActionRole)
         b.clicked.connect(self.open_folder)
         bb.rejected.connect(dlg.reject)

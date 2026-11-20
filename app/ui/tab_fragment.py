@@ -6,7 +6,7 @@ import os
 import numpy as np
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGroupBox, QHBoxLayout, QLabel, QListWidget,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QListWidget,
                                QSlider, QSpinBox, QSplitter, QVBoxLayout, QWidget)
 
 from ..core import fragment as fr
@@ -17,7 +17,7 @@ from .chrome import DropZone, ScreenHeader
 from .infra import UndoMixin, settings
 from .thumbs import page_pixmap
 from .widgets import (PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, open_folder,
-                      try_open_pdf, zoom_bar)
+                      try_open_pdf, zoom_bar, card)
 
 PREVIEW_DPI = 150
 VIEW_DPI = 90
@@ -57,8 +57,7 @@ class FragmentTab(QWidget, UndoMixin):
 
         split = QSplitter(Qt.Horizontal)
         # --- откуда ---
-        g1 = QGroupBox("Откуда — обведите фрагмент мышью (красная рамка)")
-        v1 = QVBoxLayout(g1)
+        g1, v1 = card("Откуда", "Обведите фрагмент мышью — красная рамка")
         self.view_src = PageView(color="#e53935")
         self.view_src.rectChanged.connect(self.src_rect_changed)
         v1.addWidget(self.view_src, 1)
@@ -89,6 +88,8 @@ class FragmentTab(QWidget, UndoMixin):
                                 "Всё, кроме белого — и печать, и текст под ней.\n"
                                 "Без удаления фона — прямоугольник как есть, вместе с бумагой.")
         self.cb_mode.currentIndexChanged.connect(self.settings_changed)
+        self.cb_mode.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.cb_mode.setMinimumContentsLength(14)
         mv.addWidget(self.cb_mode)
         mv.addWidget(QLabel("Чувствительность:"))
         self.sl_sens = QSlider(Qt.Horizontal)
@@ -124,13 +125,12 @@ class FragmentTab(QWidget, UndoMixin):
         self.btn_remove = big_button("", self.remove_placed, icon_name="x", ghost=True,
                                      tip="Убрать выделенный фрагмент из списка")
         rowl.addWidget(self.btn_remove)
-        mid.setMinimumWidth(240)
+        mid.setMinimumWidth(220)
         mid.setMaximumWidth(300)
         self.card_mid = mid
         split.addWidget(mid)
         # --- куда ---
-        g2 = QGroupBox("Куда — перетащите фрагмент мышью (или щёлкните место)")
-        v2 = QVBoxLayout(g2)
+        g2, v2 = card("Куда", "Перетащите фрагмент мышью (или щёлкните место)")
         self.view_dst = PageView(color="#1565c0")
         self.view_dst.rectChanged.connect(self.dst_rect_changed)
         v2.addWidget(self.view_dst, 1)
@@ -141,7 +141,7 @@ class FragmentTab(QWidget, UndoMixin):
         self.sp_dst.setToolTip("Страница, на которую поставить фрагмент")
         self.sp_dst.valueChanged.connect(self.show_dst)
         zb2.addWidget(self.sp_dst)
-        self.btn_natural = big_button("1:1", self.natural_size, icon_name="maximize", ghost=True,
+        self.btn_natural = big_button("1:1", self.natural_size, ghost=True,
                                       tip="Вернуть натуральный размер (как на исходной странице)")
         zb2.addWidget(self.btn_natural)
         v2.addLayout(zb2)
@@ -153,8 +153,8 @@ class FragmentTab(QWidget, UndoMixin):
         bottom = QHBoxLayout()
         hint = QLabel("Размер — за синий квадратик в углу. Масштаб страницы — Ctrl + колесо мыши.")
         hint.setObjectName("Muted")
-        bottom.addWidget(hint)
-        bottom.addStretch()
+        hint.setWordWrap(True)
+        bottom.addWidget(hint, 1)
         self.btn_save = big_button("Сохранить новый PDF…", self.save, primary=True, icon_name="save",
                                    tip="Сохранить PDF «Куда» со всеми поставленными фрагментами. Исходники не меняются")
         bottom.addWidget(self.btn_save)

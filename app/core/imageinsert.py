@@ -34,13 +34,19 @@ def load_image(path: str, remove_white: bool = False) -> Image.Image:
     return remove_white_background(img) if remove_white else img
 
 
-def insert_image(pdf_path: str, img: Image.Image, rect: NRect, pages: list[int], out_path: str) -> int:
+def insert_image(pdf_path: str, img: Image.Image, rect: NRect, pages: list[int], out_path: str,
+                 progress=None) -> int:
+    """progress(i, n) — ход работы; может бросить Cancelled, тогда файл не сохраняется."""
     doc = open_pdf(pdf_path)
     try:
         data = to_png_bytes(img)
-        for i in pages:
+        for k, i in enumerate(pages):
+            if progress:
+                progress(k, len(pages))
             page = doc[i]
             insert_png(page, rect.to_points(page.rect), data)
+        if progress:
+            progress(len(pages), len(pages))
         save_doc(doc, out_path, inputs=(pdf_path,))
     finally:
         doc.close()

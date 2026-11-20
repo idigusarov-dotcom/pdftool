@@ -187,10 +187,10 @@ def test_every_screen_survives_bad_pdf(win, files, key):
         fn(files["acts"])
         before = getattr(tab, attr)
         assert before is not None
-        n = len(win._toasts)
+        last = win._toasts[-1] if win._toasts else None     # уведомлений на экране не больше трёх
         fn(files[key])
         assert getattr(tab, attr) is before
-        assert len(win._toasts) == n + 1 and win._toasts[-1].property("kind") == "error"
+        assert win._toasts and win._toasts[-1] is not last and win._toasts[-1].property("kind") == "error"
 
 
 def test_image_screen_bad_picture(win, files, tmp_path):

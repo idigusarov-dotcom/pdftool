@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QFileDialog, QGraphicsItem, QGraphicsPixmapItem, QGraphicsRectItem,
                                QGraphicsScene, QGraphicsView, QMessageBox, QPushButton, QWidget)
@@ -108,6 +108,49 @@ def ask_save(parent: QWidget, suggested: str, flt="PDF (*.pdf)") -> str:
     p = with_ext(p, flt)
     remember_dir(p)
     return p
+
+
+class progress_window:
+    """Окно «идёт работа» с полосой и кнопкой «Отмена» для долгих сохранений в окне программы.
+
+        with progress_window(self, "Ставлю картинку на страницы…") as prog:
+            core_function(..., progress=prog)      # prog(i, n); при «Отмене» бросает Cancelled
+
+    Окно появляется, только если работа идёт дольше полсекунды; пока оно открыто, остальное окно
+    программы недоступно (нельзя нажать «Сохранить» второй раз), но перерисовывается — не «зависает»."""
+
+    def __init__(self, parent: QWidget, text: str):
+        self.parent, self.text, self.dlg = parent, text, None
+
+    def __enter__(self):
+        from PySide6.QtWidgets import QApplication, QProgressDialog
+        self.dlg = QProgressDialog(self.text, "Отмена", 0, 100, self.parent)
+        self.dlg.setWindowTitle("Подождите")
+        self.dlg.setWindowModality(Qt.WindowModal)
+        self.dlg.setMinimumDuration(500)
+        self.dlg.setAutoClose(False)
+        self.dlg.setAutoReset(False)
+        self.dlg.setMinimumWidth(360)
+        self.dlg.setValue(0)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        return self
+
+    def __call__(self, i: int, n: int):
+        from PySide6.QtWidgets import QApplication
+        from ..core.pdfutil import Cancelled
+        if n:
+            self.dlg.setLabelText(f"{self.text}\n{min(i, n)} из {n}")
+            self.dlg.setValue(int(100 * min(i, n) / n))
+        QApplication.processEvents()
+        if self.dlg.wasCanceled():
+            raise Cancelled()
+
+    def __exit__(self, *exc):
+        from PySide6.QtWidgets import QApplication
+        QApplication.restoreOverrideCursor()
+        self.dlg.close()
+        self.dlg.deleteLater()
+        return False
 
 
 def try_open_pdf(parent: QWidget, path: str):
@@ -224,7 +267,7 @@ class PageView(QGraphicsView):
         self.setScene(QGraphicsScene(self))
         self.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
         from . import style
-        self.setBackgroundBrush(QColor("#3a3f4b" if style.is_dark() else "#e6e9f0"))
+        self.setBackgroundBrush(QColor(style.colors()["page"]))
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.page_item: QGraphicsPixmapItem | None = None
         self.boxes: dict[str, BoxItem] = {}
@@ -292,6 +335,15 @@ class PageView(QGraphicsView):
             e.accept()
             return
         super().wheelEvent(e)
+
+    def viewportEvent(self, e):
+        # щипок двумя пальцами на трекпаде (macOS) — тот же масштаб, что и Ctrl/⌘ + колесо
+        if e.type() == QEvent.NativeGesture and e.gestureType() == Qt.ZoomNativeGesture:
+            f = 1.0 + e.value()
+            if 0.5 < f < 2.0:
+                self.zoom(f)
+            return True
+        return super().viewportEvent(e)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -364,10 +416,28 @@ class PageView(QGraphicsView):
         super().mouseReleaseEvent(e)
 
 
+def card(title: str, hint: str = ""):
+    """Карточка-группа: короткий заголовок и (по желанию) пояснение мелким серым текстом с переносом.
+    Длинный текст в самом заголовке QGroupBox не переносится и раздвигает окно — поэтому так."""
+    from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout
+    g = QGroupBox(title)
+    v = QVBoxLayout(g)
+    v.setContentsMargins(2, 0, 2, 0)       # отступы карточки уже заданы в QSS (padding)
+    v.setSpacing(6)
+    if hint:
+        h = QLabel(hint)
+        h.setObjectName("Hint")
+        h.setWordWrap(True)
+        v.addWidget(h)
+    return g, v
+
+
 def zoom_bar(view: PageView):
     """Небольшая панель масштаба под просмотром страницы."""
+    from PySide6.QtCore import QSize
     from PySide6.QtWidgets import QHBoxLayout, QToolButton
     lay = QHBoxLayout()
+    lay.setSpacing(2)
     from . import style
     for name, tip, fn in (("zoom-out", "Уменьшить", view.zoom_out),
                           ("zoom-in", "Увеличить (или Ctrl + колесо мыши)", view.zoom_in),
@@ -375,8 +445,10 @@ def zoom_bar(view: PageView):
         b = QToolButton()
         b.setIcon(style.icon(name))
         b.setProperty("icon_name", name)
+        b.setIconSize(QSize(16, 16))
         b.setToolTip(tip)
         b.clicked.connect(fn)
         lay.addWidget(b)
+    lay.addSpacing(6)
     lay.addStretch()
     return lay

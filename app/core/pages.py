@@ -27,7 +27,7 @@ def parse_ranges(text: str, n_pages: int) -> list[list[int]]:
         part = part.strip()
         if not part:
             continue
-        m = re.fullmatch(r"(\d+)\s*[-–]\s*(\d+)", part)
+        m = re.fullmatch(r"(\d+)\s*[-–—−]\s*(\d+)", part)
         if m:
             a, b = int(m.group(1)), int(m.group(2))
         elif part.isdigit():
