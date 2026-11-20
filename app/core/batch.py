@@ -5,12 +5,11 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
-import pymupdf
 
 from . import signatures as sig
 from . import templates as tp
 from .logsetup import log
-from .pdfutil import NRect
+from .pdfutil import NRect, PdfError, open_pdf
 
 
 class Cancelled(Exception):
@@ -30,7 +29,7 @@ class BatchItem:
 
 
 def _norm(p: str) -> str:
-    return os.path.normcase(os.path.abspath(p))
+    return os.path.normcase(os.path.realpath(os.path.abspath(p)))
 
 
 def check_items(items: Sequence[BatchItem]) -> list[str]:
@@ -40,8 +39,15 @@ def check_items(items: Sequence[BatchItem]) -> list[str]:
     seen = {}
     for k, it in enumerate(items, 1):
         for p in (it.acts_path, it.receipts_path):
-            if not os.path.exists(p):
-                errs.append(f"Пара {k}: нет файла {p}")
+            try:
+                open_pdf(p).close()
+            except PdfError as e:
+                errs.append(f"Пара {k}: {e}")
+        if not (it.out_path or "").strip():
+            errs.append(f"Пара {k}: не указано имя результата")
+            continue
+        if not os.path.isdir(os.path.dirname(os.path.abspath(it.out_path))):
+            errs.append(f"Пара {k}: нет папки для результата ({it.out_path})")
         o = _norm(it.out_path)
         if o in inputs:
             errs.append(f"Пара {k}: результат нельзя записать поверх исходного файла ({it.out_path})")
@@ -52,7 +58,7 @@ def check_items(items: Sequence[BatchItem]) -> list[str]:
 
 
 def build_job(it: BatchItem, temps: Sequence[tp.Template]) -> sig.TransferJob:
-    with pymupdf.open(it.acts_path) as a, pymupdf.open(it.receipts_path) as r:
+    with open_pdf(it.acts_path) as a, open_pdf(it.receipts_path) as r:
         n_a, n_r = len(a), len(r)
     mapping = list(it.mapping) if it.mapping is not None else sig.guess_mapping(n_r, n_a)
     mapping = (mapping + [None] * n_r)[:n_r]
@@ -78,7 +84,7 @@ def run_batch(items: Sequence[BatchItem], temps: Sequence[tp.Template] = (),
         raise ValueError("\n".join(errs))
     sizes = []
     for it in items:
-        with pymupdf.open(it.receipts_path) as r:
+        with open_pdf(it.receipts_path) as r:
             sizes.append(len(r))
     total, base = sum(sizes), 0
     results: list[dict] = []

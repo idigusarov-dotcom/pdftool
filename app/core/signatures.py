@@ -8,7 +8,7 @@ import numpy as np
 import pymupdf
 
 from .ink import extract_ink, has_ink, to_png_bytes
-from .pdfutil import NRect, insert_png, render_page, save_doc
+from .pdfutil import NRect, PdfError, check_output_path, insert_png, open_pdf, render_page, save_doc
 
 # Значения по умолчанию подобраны по реальным актам/распискам (Кржижановского 5/1)
 DEFAULT_SRC_RECT = NRect(0.139, 0.770, 0.701, 0.840)   # блок «В чем и расписываемся» в акте
@@ -76,46 +76,58 @@ def fit_rect(src_w: float, src_h: float, target: pymupdf.Rect) -> pymupdf.Rect:
     return pymupdf.Rect(target.x0, y0, target.x0 + w, y0 + h)
 
 
+def _act_index(job: TransferJob, i: int, n_acts: int) -> Optional[int]:
+    a = job.mapping[i] if i < len(job.mapping) else None
+    if a is not None and not (0 <= a < n_acts):
+        raise PdfError(f"Расписка стр. {i + 1}: в файле актов нет страницы {a + 1} (в нём {n_acts} стр.). "
+                       "Проверьте пары страниц.")
+    return a
+
+
 def apply_transfer(job: TransferJob, out_path: str,
                    progress: Callable[[int, int], None] | None = None) -> dict:
     """Создаёт новый PDF расписок с подписями. Возвращает отчёт."""
-    acts = pymupdf.open(job.acts_path)
-    rec = pymupdf.open(job.receipts_path)
-    report = {"placed": [], "blank": [], "empty_ink": []}
-    for i, page in enumerate(rec):
-        if progress:
-            progress(i, len(rec))
-        a = job.mapping[i] if i < len(job.mapping) else None
-        if a is None:
-            report["blank"].append(i)
-            continue
-        src = job.src_overrides.get(a, job.src_rect)
-        rgba = _cut(job, acts, a, src)
-        if not has_ink(rgba):
-            report["empty_ink"].append(i)
-            continue
-        dst = job.dst_overrides.get(i, job.dst_rect).to_points(page.rect)
-        _place(page, rgba, src.to_points(acts[a].rect), dst, job.trim_left)
-        report["placed"].append((i, a))
-    save_doc(rec, out_path, inputs=(job.acts_path, job.receipts_path))
-    rec.close()
-    acts.close()
+    check_output_path(out_path, (job.acts_path, job.receipts_path))
+    acts = open_pdf(job.acts_path)
+    rec = open_pdf(job.receipts_path)
+    try:
+        report = {"placed": [], "blank": [], "empty_ink": []}
+        for i, page in enumerate(rec):
+            if progress:
+                progress(i, len(rec))
+            a = _act_index(job, i, len(acts))
+            if a is None:
+                report["blank"].append(i)
+                continue
+            src = job.src_overrides.get(a, job.src_rect)
+            rgba = _cut(job, acts, a, src)
+            if not has_ink(rgba):
+                report["empty_ink"].append(i)
+                continue
+            dst = job.dst_overrides.get(i, job.dst_rect).to_points(page.rect)
+            _place(page, rgba, src.to_points(acts[a].rect), dst, job.trim_left)
+            report["placed"].append((i, a))
+        save_doc(rec, out_path, inputs=(job.acts_path, job.receipts_path))
+    finally:
+        rec.close()
+        acts.close()
     return report
 
 
 def preview_page(job: TransferJob, receipt_index: int, dpi: int = 100) -> np.ndarray:
     """Растр одной расписки с подписью (без сохранения файла)."""
-    acts = pymupdf.open(job.acts_path)
-    rec = pymupdf.open(job.receipts_path)
-    page = rec[receipt_index]
-    a = job.mapping[receipt_index] if receipt_index < len(job.mapping) else None
-    if a is not None:
-        src = job.src_overrides.get(a, job.src_rect)
-        rgba = _cut(job, acts, a, src)
-        if has_ink(rgba):
-            dst = job.dst_overrides.get(receipt_index, job.dst_rect).to_points(page.rect)
-            _place(page, rgba, src.to_points(acts[a].rect), dst, job.trim_left)
-    img = render_page(rec, receipt_index, dpi)
-    rec.close()
-    acts.close()
-    return img
+    acts = open_pdf(job.acts_path)
+    rec = open_pdf(job.receipts_path)
+    try:
+        page = rec[receipt_index]
+        a = _act_index(job, receipt_index, len(acts))
+        if a is not None:
+            src = job.src_overrides.get(a, job.src_rect)
+            rgba = _cut(job, acts, a, src)
+            if has_ink(rgba):
+                dst = job.dst_overrides.get(receipt_index, job.dst_rect).to_points(page.rect)
+                _place(page, rgba, src.to_points(acts[a].rect), dst, job.trim_left)
+        return render_page(rec, receipt_index, dpi)
+    finally:
+        rec.close()
+        acts.close()

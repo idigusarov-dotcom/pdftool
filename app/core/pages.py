@@ -6,13 +6,13 @@ import re
 
 import pymupdf
 
-from .pdfutil import save_doc
+from .pdfutil import save_doc, open_pdf
 
 
 def merge(paths: list[str], out_path: str) -> int:
     out = pymupdf.open()
     for p in paths:
-        with pymupdf.open(p) as d:
+        with open_pdf(p) as d:
             out.insert_pdf(d)
     n = len(out)
     save_doc(out, out_path, inputs=paths)
@@ -44,7 +44,7 @@ def parse_ranges(text: str, n_pages: int) -> list[list[int]]:
 
 
 def split(path: str, groups: list[list[int]], out_dir: str) -> list[str]:
-    src = pymupdf.open(path)
+    src = open_pdf(path)
     base = os.path.splitext(os.path.basename(path))[0]
     outs = []
     for g in groups:
@@ -65,14 +65,14 @@ def split(path: str, groups: list[list[int]], out_dir: str) -> list[str]:
 
 
 def split_every_page(path: str, out_dir: str) -> list[str]:
-    with pymupdf.open(path) as d:
+    with open_pdf(path) as d:
         n = len(d)
     return split(path, [[i] for i in range(n)], out_dir)
 
 
 def rebuild(path: str, order: list[int], rotations: dict[int, int], out_path: str) -> int:
     """Новый файл: страницы в порядке `order` (удалённые просто не указаны), с поворотами."""
-    src = pymupdf.open(path)
+    src = open_pdf(path)
     out = pymupdf.open()
     for i in order:
         out.insert_pdf(src, from_page=i, to_page=i)

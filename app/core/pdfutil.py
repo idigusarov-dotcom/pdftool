@@ -36,8 +36,51 @@ class NRect:
                      (rect.x1 - page_rect.x0) / page_rect.width, (rect.y1 - page_rect.y0) / page_rect.height)
 
 
+class PdfError(ValueError):
+    """Понятная пользователю ошибка: файл нельзя открыть или сохранить."""
+
+
+def same_file(a: str, b: str) -> bool:
+    """Один и тот же файл? На Windows регистр букв и вид слэшей не важны."""
+    if not a or not b:
+        return False
+    na = os.path.normcase(os.path.realpath(os.path.abspath(a)))
+    nb = os.path.normcase(os.path.realpath(os.path.abspath(b)))
+    if na == nb:
+        return True
+    try:
+        return os.path.exists(a) and os.path.exists(b) and os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def open_pdf(path: str) -> pymupdf.Document:
-    return pymupdf.open(path)
+    """Открывает PDF и проверяет, что с ним можно работать. Иначе — PdfError с понятным текстом."""
+    name = os.path.basename(path) or path
+    if not path or not os.path.isfile(path):
+        raise PdfError(f"Файл «{name}» не найден. Возможно, его переместили или удалили.")
+    if os.path.getsize(path) == 0:
+        raise PdfError(f"Файл «{name}» пустой (0 байт). Скорее всего, он не докачался или повреждён.")
+    try:
+        doc = pymupdf.open(path)
+    except Exception as e:  # noqa: BLE001
+        raise PdfError(f"Не удалось открыть «{name}»: файл повреждён или это не PDF.") from e
+    if not doc.is_pdf:
+        doc.close()
+        raise PdfError(f"Файл «{name}» — не PDF.")
+    if doc.needs_pass and not doc.authenticate(""):
+        doc.close()
+        raise PdfError(f"Файл «{name}» защищён паролем. Снимите пароль (например, распечатайте в PDF) "
+                       "и откройте снова.")
+    if len(doc) == 0:
+        doc.close()
+        raise PdfError(f"В файле «{name}» нет ни одной страницы.")
+    try:
+        doc[0].bound()
+    except Exception as e:  # noqa: BLE001
+        doc.close()
+        raise PdfError(f"Не удалось прочитать страницы «{name}»: файл повреждён.") from e
+    return doc
 
 
 def render_page(doc: pymupdf.Document, index: int, dpi: int = 150) -> np.ndarray:
@@ -58,13 +101,38 @@ def safe_output_path(input_path: str, suffix: str, ext: str = ".pdf") -> str:
     return cand
 
 
-def save_doc(doc: pymupdf.Document, out_path: str, inputs: list[str] | tuple[str, ...] = ()) -> str:
-    """Сохраняет документ; запрещает запись поверх входных файлов."""
-    absout = os.path.abspath(out_path)
+def check_output_path(out_path: str, inputs=()) -> None:
+    """Проверки до сохранения: имя задано, папка есть, это не исходный файл."""
+    if not out_path or not out_path.strip():
+        raise PdfError("Не указано имя файла для сохранения.")
     for p in inputs:
-        if p and os.path.abspath(p) == absout:
-            raise ValueError("Нельзя сохранять поверх исходного файла. Выберите другое имя.")
-    doc.save(out_path, garbage=3, deflate=True)
+        if p and same_file(p, out_path):
+            raise PdfError("Нельзя сохранять поверх исходного файла. Выберите другое имя.")
+    d = os.path.dirname(os.path.abspath(out_path))
+    if not os.path.isdir(d):
+        raise PdfError(f"Папки «{d}» нет. Выберите другую папку для сохранения.")
+
+
+def save_doc(doc: pymupdf.Document, out_path: str, inputs: list[str] | tuple[str, ...] = ()) -> str:
+    """Сохраняет документ; запрещает запись поверх входных файлов.
+    Пишет сначала во временный файл рядом и только потом подменяет: при сбое старый файл не портится."""
+    check_output_path(out_path, inputs)
+    d = os.path.dirname(os.path.abspath(out_path))
+    tmp = os.path.join(d, f"~{os.path.basename(out_path)}.{os.getpid()}.tmp")
+    try:
+        doc.save(tmp, garbage=3, deflate=True)
+        os.replace(tmp, out_path)
+    except PermissionError as e:
+        raise PdfError(f"Не удалось записать «{os.path.basename(out_path)}»: файл открыт в другой программе "
+                       "(закройте его) или нет прав на запись в эту папку.") from e
+    except OSError as e:
+        raise PdfError(f"Не удалось записать «{os.path.basename(out_path)}»: {e.strerror or e}") from e
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     return out_path
 
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 
-import pymupdf
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QProgressDialog, QRadioButton, QSplitter,
@@ -17,7 +16,7 @@ from .infra import UndoMixin, load_rect, run_task, save_rect, settings
 from .chrome import Collapsible, DropZone, ScreenHeader
 from .templbar import TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
-from .widgets import open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, zoom_bar
+from .widgets import try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, zoom_bar
 
 HELP = ("Откройте PDF. Номер квартиры впишите в таблицу (двойной щелчок) или нажмите «Распознать номера» — "
         "перед этим нарисуйте на странице справа зелёную зону, где написан номер (для второго вида бланка — зону 2). "
@@ -128,7 +127,10 @@ class SortTab(QWidget, UndoMixin):
         path = path or ask_open_pdf(self)
         if not path:
             return
-        self.path, self.doc = path, pymupdf.open(path)
+        doc = try_open_pdf(self, path)
+        if doc is None:
+            return
+        self.path, self.doc = path, doc
         self.dz.set_loaded(f"{os.path.basename(path)} · {len(self.doc)} стр.")
         self.unsure = set()
         self._saved = False
@@ -388,5 +390,12 @@ class SortTab(QWidget, UndoMixin):
             return error(self, "Сначала откройте PDF.")
         out = out or ask_save(self, safe_output_path(self.path, "список_квартир", ".csv"), "CSV (*.csv)")
         if out:
-            sorting.export_csv(self.values_by_page(), out)
+            try:
+                sorting.export_csv(self.values_by_page(), out)
+            except PermissionError:
+                return error(self, f"Не удалось записать «{os.path.basename(out)}»: файл открыт в Excel или другой "
+                                   "программе (закройте его) или нет прав на запись в эту папку.")
+            except OSError as e:
+                log.exception("CSV")
+                return error(self, f"Не удалось записать «{os.path.basename(out)}»: {e.strerror or e}")
             info(self, f"Список сохранён: {out}\n(открывается в Excel)")

@@ -142,11 +142,17 @@
 ```bash
 python -m venv .venv
 .venv\Scripts\activate          # Windows  (Linux: source .venv/bin/activate)
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt -c constraints.txt   # проверенные версии библиотек
 python run.py                   # запуск
 pytest -q tests                 # тесты (реальные PDF ищутся в $PDFTOOL_DATA, иначе пропускаются)
 pyinstaller --noconfirm pdftool.spec   # сборка dist/PdfTool.exe
+dist\PdfTool.exe --self-test папка    # самопроверка собранного exe → папка\selftest.json и снимок окна
 ```
+
+Самопроверка (`--self-test`) проверяет, что в exe есть шрифты, иконки и модель цифр, что работают
+PyMuPDF и Qt, пути с кириллицей и пробелами, и сохраняет снимок окна. Её же запускает CI на Windows
+после каждой сборки (в том числе на pull request); результат — артефакт `smoke-test`.
+Если у коллеги программа не запускается, можно попросить его выполнить эту команду и прислать `selftest.json`.
 
 Скриншоты экранов без монитора: `QT_QPA_PLATFORM=offscreen python tools/screens.py`.
 Размер окна задаётся переменной `SCREEN_SIZE=1920x1080`, приставка имён — `SCREEN_PREFIX`.

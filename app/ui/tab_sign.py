@@ -21,7 +21,7 @@ from .infra import UndoMixin, load_rect, run_task, save_rect, settings
 from .chrome import Collapsible, DropZone, ScreenHeader
 from .templbar import TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
-from .widgets import (open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar)
+from .widgets import (try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar)
 
 HELP = ("1) Откройте АКТЫ и РАСПИСКИ.  2) Сопоставьте: вручную в таблице или кнопкой «Распознать номера» "
         "(сначала задайте зелёную «зону номера» на акте и на расписке).  3) Красная рамка — откуда берём подпись, "
@@ -194,23 +194,33 @@ class SignTab(QWidget, UndoMixin):
         self.show_row(self.table.currentRow())
 
     # ---------- загрузка ----------
-    def open_acts(self, path: str = ""):
+    def open_acts(self, path: str = "") -> bool:
         path = path or ask_open_pdf(self, "Файл с актами")
         if path:
-            self.acts_path, self.acts = path, pymupdf.open(path)
+            doc = try_open_pdf(self, path)
+            if doc is None:
+                return False
+            self.acts_path, self.acts = path, doc
             self.dz_acts.set_loaded(f"{os.path.basename(path)} · {len(self.acts)} стр.")
             self.nums_act = []
             self.page_tpl = {"act": {}, "rec": {}}
             self.rebuild()
+            return True
+        return False
 
-    def open_receipts(self, path: str = ""):
+    def open_receipts(self, path: str = "") -> bool:
         path = path or ask_open_pdf(self, "Файл с расписками")
         if path:
-            self.rec_path, self.rec = path, pymupdf.open(path)
+            doc = try_open_pdf(self, path)
+            if doc is None:
+                return False
+            self.rec_path, self.rec = path, doc
             self.dz_rec.set_loaded(f"{os.path.basename(path)} · {len(self.rec)} стр.")
             self.nums_rec = []
             self.page_tpl = {"act": {}, "rec": {}}
             self.rebuild()
+            return True
+        return False
 
     def rebuild(self):
         if not (self.acts and self.rec):
@@ -439,8 +449,8 @@ class SignTab(QWidget, UndoMixin):
     # ---------- для пакетного режима ----------
     def load_pair(self, acts: str, receipts: str, template: str | None = None, mapping=None,
                   src_overrides=None, dst_overrides=None):
-        self.open_acts(acts)
-        self.open_receipts(receipts)
+        if not (self.open_acts(acts) and self.open_receipts(receipts)):
+            return False
         if template:
             self.tbar.reload(template)
             t = tp.get(template)
@@ -452,6 +462,7 @@ class SignTab(QWidget, UndoMixin):
             self.job.dst_overrides = dict(dst_overrides or {})
             self.show_row(self.table.currentRow())
         self.reset_undo()
+        return True
 
     def export_pair(self) -> dict | None:
         if not self.job:
@@ -574,7 +585,12 @@ class SignTab(QWidget, UndoMixin):
             inner = QWidget()
             v = QVBoxLayout(inner)
             for i in range(len(self.rec)):
-                img = sig.preview_page(self.job, i, dpi=70)
+                try:
+                    img = sig.preview_page(self.job, i, dpi=70)
+                except Exception as e:  # noqa: BLE001
+                    log.exception("Предпросмотр")
+                    dlg.deleteLater()
+                    return error(self, f"Не удалось показать предпросмотр: {e}")
                 lab = QLabel()
                 lab.setPixmap(np_to_pixmap(img))
                 m = self.job.mapping[i]

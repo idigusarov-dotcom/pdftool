@@ -8,7 +8,7 @@ import numpy as np
 import pymupdf
 
 from .ink import extract_ink, to_png_bytes
-from .pdfutil import NRect, insert_png, render_page, save_doc
+from .pdfutil import NRect, insert_png, render_page, save_doc, open_pdf
 
 CUT_DPI = 300
 
@@ -55,7 +55,7 @@ class Placement:
 
     def png(self) -> bytes:
         if self._png is None:
-            with pymupdf.open(self.src_path) as d:
+            with open_pdf(self.src_path) as d:
                 rgba, _ = trim(cut(d, self.src_page, self.src_rect, self.mode, self.sensitivity, self.keep_colors))
             if self.opacity < 1:
                 rgba = rgba.copy()
@@ -79,7 +79,7 @@ def natural_rect(src_doc: pymupdf.Document, src_page: int, src_rect: NRect, rgba
 def apply(target_path: str, placements: list[Placement], out_path: Optional[str] = None) -> pymupdf.Document:
     """Ставит все фрагменты. С out_path — сохраняет (исходники не перезаписываются), иначе возвращает документ
     в памяти (для предпросмотра)."""
-    doc = pymupdf.open(target_path)
+    doc = open_pdf(target_path)
     for pl in placements:
         page = doc[pl.dst_page]
         insert_png(page, pl.dst_rect.to_points(page.rect), pl.png())

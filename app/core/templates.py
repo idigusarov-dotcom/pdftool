@@ -16,7 +16,7 @@ from typing import Optional, Sequence
 import numpy as np
 import pymupdf
 
-from .pdfutil import NRect, render_page
+from .pdfutil import NRect, render_page, open_pdf
 
 FP_DPI = 75
 FP_LEN = 600          # длина профиля (ресэмплинг по высоте страницы)
@@ -74,8 +74,14 @@ class Template:
 
 
 # ---------- хранилище ----------
+_WIN_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
 def _fname(name: str) -> str:
-    safe = re.sub(r'[\\/:*?"<>|]+', "_", name).strip() or "шаблон"
+    """Имя файла шаблона, допустимое и на Windows (без \\/:*?"<>|, не CON/NUL…)."""
+    safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", name).strip() or "шаблон"
+    if safe.split(".")[0].upper() in _WIN_RESERVED:
+        safe = "_" + safe
     return os.path.join(templates_dir(), safe + ".json")
 
 
@@ -228,7 +234,7 @@ def detect_pages(path: str, temps: Sequence[Template], role: str,
                  pages: Optional[Sequence[int]] = None) -> dict[int, Detected]:
     """Определяет бланк каждой страницы файла (role = "act" или "rec")."""
     out: dict[int, Detected] = {}
-    with pymupdf.open(path) as doc:
+    with open_pdf(path) as doc:
         for i in (pages if pages is not None else range(len(doc))):
             out[i] = detect(page_profile(render_page(doc, i, FP_DPI)), temps, role)
     return out
