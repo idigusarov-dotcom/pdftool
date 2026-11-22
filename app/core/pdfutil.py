@@ -1,7 +1,10 @@
 """Общие функции работы с PDF (PyMuPDF)."""
 from __future__ import annotations
 
+import errno
 import os
+import re
+import sys
 from dataclasses import dataclass
 
 import numpy as np
@@ -38,6 +41,30 @@ class NRect:
 
 class PdfError(ValueError):
     """Понятная пользователю ошибка: файл нельзя открыть или сохранить."""
+
+
+def human_error(e) -> str:
+    """Текст ошибки для человека. Сообщения MuPDF («code=2: cannot open file … Permission denied») и
+    системные ошибки Windows переводятся на понятный язык; техническая причина остаётся в конце."""
+    text = str(e).strip()
+    if not re.match(r"code=\d+:", text) and not isinstance(e, OSError):
+        return text
+    low = text.lower()
+    if "no space" in low or "disk full" in low or getattr(e, "errno", None) == errno.ENOSPC:
+        msg = "На диске не хватает места. Освободите место или сохраните в другую папку."
+    elif "permission denied" in low or "access is denied" in low or isinstance(e, PermissionError):
+        msg = ("Нет доступа к файлу или папке: файл открыт в другой программе (закройте его) "
+               "или нет прав на запись в эту папку.")
+    elif "too long" in low or getattr(e, "errno", None) == errno.ENAMETOOLONG:
+        msg = "Слишком длинное имя файла или путь. Выберите папку ближе к диску или имя короче."
+    elif "invalid argument" in low or getattr(e, "errno", None) == errno.EINVAL:
+        msg = "Недопустимое имя файла. Не используйте символы \\ / : * ? \" < > | и имена вроде CON, NUL, COM1."
+    elif "out of range" in low or "format error" in low or "syntax error" in low or "repair" in low:
+        msg = "PDF повреждён, программа не может прочитать его страницы. Пересохраните файл (например, «Печать → PDF»)."
+    else:
+        msg = "Не удалось обработать PDF."
+    tech = re.sub(r"^code=\d+:\s*", "", text)
+    return f"{msg}\n(техническая причина: {tech[:160]})"
 
 
 class Cancelled(Exception):
@@ -115,6 +142,26 @@ def check_output_path(out_path: str, inputs=()) -> None:
     d = os.path.dirname(os.path.abspath(out_path))
     if not os.path.isdir(d):
         raise PdfError(f"Папки «{d}» нет. Выберите другую папку для сохранения.")
+    if sys.platform == "win32":
+        bad = windows_name_problem(os.path.basename(out_path))
+        if bad:
+            raise PdfError(bad)
+
+
+_WIN_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+
+
+def windows_name_problem(name: str) -> str:
+    """Почему такое имя файла нельзя на Windows (пустая строка — можно)."""
+    if any(ch in name for ch in '<>:"/\\|?*') or any(ord(ch) < 32 for ch in name):
+        return f"В имени «{name}» есть недопустимый символ (\\ / : * ? \" < > |). Выберите другое имя."
+    if name.rstrip(" .") != name:
+        return f"Имя «{name}» не может заканчиваться точкой или пробелом. Выберите другое имя."
+    if name.split(".")[0].strip().upper() in _WIN_RESERVED:
+        return f"Имя «{name}» зарезервировано в Windows (CON, NUL, COM1 и т.п.). Выберите другое имя."
+    if len(name) > 255:
+        return "Слишком длинное имя файла (больше 255 символов). Выберите имя короче."
+    return ""
 
 
 def save_doc(doc: pymupdf.Document, out_path: str, inputs: list[str] | tuple[str, ...] = ()) -> str:
@@ -122,15 +169,23 @@ def save_doc(doc: pymupdf.Document, out_path: str, inputs: list[str] | tuple[str
     Пишет сначала во временный файл рядом и только потом подменяет: при сбое старый файл не портится."""
     check_output_path(out_path, inputs)
     d = os.path.dirname(os.path.abspath(out_path))
-    tmp = os.path.join(d, f"~{os.path.basename(out_path)}.{os.getpid()}.tmp")
+    name = os.path.basename(out_path)
+    # короткое имя временного файла: длинное имя результата + «.tmp» не должно упереться в предел длины
+    tmp = os.path.join(d, f"~pdftool.{os.getpid()}.{id(doc) % 100000}.tmp")
     try:
+        # сначала создаём файл средствами Python: так права, место и недопустимые имена дают обычные
+        # ошибки Windows (а не сообщения MuPDF на английском)
+        with open(tmp, "wb"):
+            pass
         doc.save(tmp, garbage=3, deflate=True)
         os.replace(tmp, out_path)
     except PermissionError as e:
-        raise PdfError(f"Не удалось записать «{os.path.basename(out_path)}»: файл открыт в другой программе "
+        raise PdfError(f"Не удалось записать «{name}»: файл открыт в другой программе "
                        "(закройте его) или нет прав на запись в эту папку.") from e
     except OSError as e:
-        raise PdfError(f"Не удалось записать «{os.path.basename(out_path)}»: {e.strerror or e}") from e
+        raise PdfError(f"Не удалось записать «{name}». " + human_error(e).split("\n")[0]) from e
+    except RuntimeError as e:      # ошибки MuPDF при записи (нет места, сбой диска)
+        raise PdfError(f"Не удалось записать «{name}». " + human_error(e)) from e
     finally:
         if os.path.exists(tmp):
             try:

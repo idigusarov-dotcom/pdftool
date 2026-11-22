@@ -307,11 +307,15 @@ class MainWindow(QMainWindow):
 
     def undo(self):
         w = self.current()
+        if getattr(w, "running", False):
+            return w._busy()
         if hasattr(w, "undo_stack"):
             w.undo_stack.undo()
 
     def redo(self):
         w = self.current()
+        if getattr(w, "running", False):
+            return w._busy()
         if hasattr(w, "undo_stack"):
             w.undo_stack.redo()
 
@@ -518,6 +522,19 @@ class MainWindow(QMainWindow):
                           "Шрифт Inter (SIL OFL 1.1), иконки Lucide (ISC).")
 
     def closeEvent(self, e):
+        if self.batch.running:
+            ans = QMessageBox.question(self, "Идёт обработка пакета",
+                                       "Пакет ещё обрабатывается. Остановить и закрыть программу?\n"
+                                       "Готовые файлы останутся, недоделанный не сохранится.",
+                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                e.ignore()
+                return
+            from PySide6.QtCore import QThreadPool
+            self.batch.cancel()
+            QThreadPool.globalInstance().waitForDone(60000)
+            for t in self.all_tabs():
+                t.undo_stack.setClean()
         names = {self.sign: "Подписи", self.batch: "Пакет", self.sort: "Сортировка", self.image: "Картинка",
                  self.pages: "Страницы", self.fragment: "Фрагменты", self.compress: "Сжатие"}
         dirty = [names[t] for t in self.all_tabs() if t.is_dirty()]

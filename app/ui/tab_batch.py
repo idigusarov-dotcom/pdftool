@@ -109,7 +109,25 @@ class BatchTab(QWidget, UndoMixin):
             return 3
         return 2 if any(i.mapping is not None for i in self.items) else 1
 
+    # ---------- пока идёт обработка, список пар менять нельзя ----------
+    running = False
+    BUSY_MSG = "Идёт обработка пакета. Дождитесь окончания или нажмите «Отмена»."
+
+    def _busy(self) -> bool:
+        if self.running:
+            error(self, self.BUSY_MSG)
+        return self.running
+
+    def _set_running(self, on: bool):
+        self.running = on
+        for b in (self.btn_add, self.btn_remove, self.btn_review, self.btn_take, self.btn_run):
+            b.setEnabled(not on)
+        self.btn_cancel.setEnabled(on)
+        self.table.setEnabled(not on)
+
     def accept_files(self, paths: list[str]):
+        if self._busy():
+            return
         pdfs = [p for p in paths if p.lower().endswith(".pdf")]
         if len(pdfs) != 2:
             return error(self, "Перетащите сразу два PDF: файл актов и файл расписок.")
@@ -202,6 +220,8 @@ class BatchTab(QWidget, UndoMixin):
         return p
 
     def add_pair(self, acts: str = "", receipts: str = "", template: str | None = None, out: str = ""):
+        if self._busy():
+            return
         acts = acts or ask_open_pdf(self, "Пара: файл с АКТАМИ")
         if not acts:
             return
@@ -215,6 +235,8 @@ class BatchTab(QWidget, UndoMixin):
         self.commit("пара добавлена")
 
     def remove_pair(self):
+        if self._busy():
+            return
         r = self.table.currentRow()
         if 0 <= r < len(self.items):
             del self.items[r]
@@ -229,13 +251,13 @@ class BatchTab(QWidget, UndoMixin):
         return -1
 
     def template_changed(self, row, txt):
-        if self._filling or not (0 <= row < len(self.items)):
+        if self._filling or self.running or not (0 <= row < len(self.items)):
             return
         self.items[row].template = None if txt == NONE else txt
         self.commit("шаблон пары")
 
     def item_edited(self, item):
-        if self._filling or item.column() != C_OUT:
+        if self._filling or self.running or item.column() != C_OUT:
             return
         self.items[item.row()].out_path = item.text().strip()
         self.commit("имя результата")
@@ -253,6 +275,8 @@ class BatchTab(QWidget, UndoMixin):
         self.show_sign()
 
     def take_mapping(self, row: int | None = None):
+        if self._busy():
+            return
         r = row if row is not None else getattr(self, "_review_row", self.table.currentRow())
         if not (0 <= r < len(self.items)) or self.sign is None:
             return error(self, "Выберите пару в таблице.")
@@ -276,25 +300,25 @@ class BatchTab(QWidget, UndoMixin):
         errs = batch.check_items(self.items)
         if errs:
             return error(self, "Нельзя начать:\n" + "\n".join(errs))
+        if self.running:
+            return
         items = copy.deepcopy(self.items)
         temps = tp.load_all()
-        self.btn_run.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
+        self._set_running(True)
         self.bar.setValue(0)
 
         def done(results):
-            self.btn_run.setEnabled(True)
-            self.btn_cancel.setEnabled(False)
+            self._set_running(False)
             self.last_results = results
             self._ran_state = self.get_state()
             for res in results:
-                self.status[res["pair"]] = self.describe(res)
+                if 0 <= res["pair"] < len(self.status):
+                    self.status[res["pair"]] = self.describe(res)
             self.fill()
             self.show_summary(results)
 
         def fail(msg):
-            self.btn_run.setEnabled(True)
-            self.btn_cancel.setEnabled(False)
+            self._set_running(False)
             error(self, "Пакет остановлен: " + msg)
 
         self.task = run_task(lambda prog: batch.run_batch(items, temps, prog), done, fail,
@@ -308,7 +332,8 @@ class BatchTab(QWidget, UndoMixin):
     @staticmethod
     def describe(res) -> str:
         if res["status"] == "error":
-            return "ошибка: " + res["error"]
+            from ..core.pdfutil import human_error
+            return "ошибка: " + human_error(res["error"]).replace("\n", " ")
         if res["status"] == "cancelled":
             return "отменено (файл не создан)"
         if res["status"] == "skipped":

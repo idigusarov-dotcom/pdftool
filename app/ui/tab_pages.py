@@ -12,11 +12,11 @@ from PySide6.QtGui import QIcon, QPixmap, QTransform
 
 from ..core import pages
 from ..core.logsetup import log
-from ..core.pdfutil import safe_output_path
+from ..core.pdfutil import Cancelled, safe_output_path
 from .infra import UndoMixin, last_dir, remember_dir
 from .thumbs import ThumbLoader, placeholder_icon, visible_rows
 from .chrome import DropZone, ScreenHeader
-from .widgets import try_open_pdf, open_folder, ask_open_pdf, ask_save, big_button, error, info
+from .widgets import try_open_pdf, open_folder, ask_open_pdf, ask_save, big_button, error, info, progress_window
 
 
 class PagesTab(QWidget, UndoMixin):
@@ -226,11 +226,14 @@ class PagesTab(QWidget, UndoMixin):
         out = out or ask_save(self, safe_output_path(paths[0], "объединённый"))
         if out:
             try:
-                n = pages.merge(paths, out)
+                with progress_window(self, "Объединяю файлы…") as prog:
+                    n = prog.run(pages.merge, paths, out)
                 self.mark_saved()
                 self._saved = True
                 info(self, f"Готово! Файлы объединены: {os.path.basename(out)}, страниц: {n}",
                      action=("Открыть папку", lambda: open_folder(out)))
+            except Cancelled:
+                info(self, "Отменено — новый файл не создан.")
             except Exception as e:  # noqa: BLE001
                 log.exception("Страницы")
                 error(self, str(e))
@@ -281,11 +284,14 @@ class PagesTab(QWidget, UndoMixin):
         out = out or ask_save(self, safe_output_path(self.path, "изменён"))
         if out:
             try:
-                n = pages.rebuild(self.path, order, rot, out)
+                with progress_window(self, "Сохраняю страницы…") as prog:
+                    n = prog.run(pages.rebuild, self.path, order, rot, out)
                 self.mark_saved()
                 self._saved = True
                 info(self, f"Готово! Сохранено страниц: {n}. Файл: {os.path.basename(out)}",
                      action=("Открыть папку", lambda: open_folder(out)))
+            except Cancelled:
+                info(self, "Отменено — новый файл не создан.")
             except Exception as e:  # noqa: BLE001
                 log.exception("Страницы")
                 error(self, str(e))
@@ -305,7 +311,10 @@ class PagesTab(QWidget, UndoMixin):
         out_dir = out_dir or self._out_dir()
         if out_dir:
             try:
-                outs = pages.split(self.path, groups, out_dir)
+                with progress_window(self, "Разделяю файл…") as prog:
+                    outs = prog.run(pages.split, self.path, groups, out_dir)
+            except Cancelled:
+                return info(self, "Остановлено. Уже созданные части остались в папке.")
             except Exception as e:  # noqa: BLE001
                 log.exception("Разделение")
                 return error(self, str(e))
@@ -318,7 +327,10 @@ class PagesTab(QWidget, UndoMixin):
         out_dir = out_dir or self._out_dir()
         if out_dir:
             try:
-                outs = pages.split_every_page(self.path, out_dir)
+                with progress_window(self, "Сохраняю каждую страницу отдельно…") as prog:
+                    outs = prog.run(pages.split_every_page, self.path, out_dir)
+            except Cancelled:
+                return info(self, "Остановлено. Уже созданные файлы остались в папке.")
             except Exception as e:  # noqa: BLE001
                 log.exception("Разделение")
                 return error(self, str(e))

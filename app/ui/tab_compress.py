@@ -170,7 +170,7 @@ class CompressTab(QWidget, UndoMixin):
         t0 = time.monotonic()
         try:
             with progress_window(self, "Сжимаю картинки…") as prog:
-                rep = cz.compress(self.path, out, level, progress=prog)
+                rep = prog.run(cz.compress, self.path, out, level)
         except Cancelled:
             return info(self, "Отменено — новый файл не создан.")
         except Exception as e:  # noqa: BLE001

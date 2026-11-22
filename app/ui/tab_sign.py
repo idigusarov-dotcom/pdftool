@@ -612,7 +612,7 @@ class SignTab(QWidget, UndoMixin):
             return
         try:
             with progress_window(self, "Переношу подписи в расписки…") as prog:
-                rep = sig.apply_transfer(self.job, out, progress=prog)
+                rep = prog.run(sig.apply_transfer, self.job, out)
         except Cancelled:
             return info(self, "Отменено — новый файл не создан.")
         except Exception as e:  # noqa: BLE001

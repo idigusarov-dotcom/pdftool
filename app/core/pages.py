@@ -6,17 +6,33 @@ import re
 
 import pymupdf
 
-from .pdfutil import save_doc, open_pdf
+from .pdfutil import PdfError, save_doc, open_pdf
 
 
-def merge(paths: list[str], out_path: str) -> int:
+def _insert(out: pymupdf.Document, src: pymupdf.Document, name: str, **kw) -> None:
+    """insert_pdf с понятной ошибкой, если страницы файла не читаются (PDF повреждён)."""
+    try:
+        out.insert_pdf(src, **kw)
+    except Exception as e:  # noqa: BLE001
+        raise PdfError(f"Не удалось взять страницы из «{name}»: PDF повреждён. Пересохраните файл "
+                       "(например, «Печать → PDF») и попробуйте снова.") from e
+
+
+def merge(paths: list[str], out_path: str, progress=None) -> int:
+    """progress(i, n) — по файлам; может бросить Cancelled (тогда ничего не сохраняется)."""
     out = pymupdf.open()
-    for p in paths:
-        with open_pdf(p) as d:
-            out.insert_pdf(d)
-    n = len(out)
-    save_doc(out, out_path, inputs=paths)
-    out.close()
+    try:
+        for k, p in enumerate(paths):
+            if progress:
+                progress(k, len(paths))
+            with open_pdf(p) as d:
+                _insert(out, d, os.path.basename(p))
+        n = len(out)
+        if progress:
+            progress(len(paths), len(paths))
+        save_doc(out, out_path, inputs=paths)
+    finally:
+        out.close()
     return n
 
 
@@ -43,45 +59,57 @@ def parse_ranges(text: str, n_pages: int) -> list[list[int]]:
     return groups
 
 
-def split(path: str, groups: list[list[int]], out_dir: str) -> list[str]:
+def split(path: str, groups: list[list[int]], out_dir: str, progress=None) -> list[str]:
     src = open_pdf(path)
     base = os.path.splitext(os.path.basename(path))[0]
     outs = []
-    for g in groups:
-        out = pymupdf.open()
-        for i in g:
-            out.insert_pdf(src, from_page=i, to_page=i)
-        name = f"{base}_стр{g[0] + 1}" + (f"-{g[-1] + 1}" if len(g) > 1 else "") + ".pdf"
-        op = os.path.join(out_dir, name)
-        k = 2
-        while os.path.exists(op):
-            op = os.path.join(out_dir, name[:-4] + f"_{k}.pdf")
-            k += 1
-        save_doc(out, op, inputs=(path,))
-        out.close()
-        outs.append(op)
-    src.close()
+    try:
+        for k, g in enumerate(groups):
+            if progress:
+                progress(k, len(groups))
+            out = pymupdf.open()
+            try:
+                for i in g:
+                    _insert(out, src, os.path.basename(path), from_page=i, to_page=i)
+                name = f"{base}_стр{g[0] + 1}" + (f"-{g[-1] + 1}" if len(g) > 1 else "") + ".pdf"
+                op = os.path.join(out_dir, name)
+                k2 = 2
+                while os.path.exists(op):
+                    op = os.path.join(out_dir, name[:-4] + f"_{k2}.pdf")
+                    k2 += 1
+                save_doc(out, op, inputs=(path,))
+            finally:
+                out.close()
+            outs.append(op)
+    finally:
+        src.close()
     return outs
 
 
-def split_every_page(path: str, out_dir: str) -> list[str]:
+def split_every_page(path: str, out_dir: str, progress=None) -> list[str]:
     with open_pdf(path) as d:
         n = len(d)
-    return split(path, [[i] for i in range(n)], out_dir)
+    return split(path, [[i] for i in range(n)], out_dir, progress=progress)
 
 
-def rebuild(path: str, order: list[int], rotations: dict[int, int], out_path: str) -> int:
+def rebuild(path: str, order: list[int], rotations: dict[int, int], out_path: str, progress=None) -> int:
     """Новый файл: страницы в порядке `order` (удалённые просто не указаны), с поворотами."""
     src = open_pdf(path)
     out = pymupdf.open()
-    for i in order:
-        out.insert_pdf(src, from_page=i, to_page=i)
-        rot = rotations.get(i, 0) % 360
-        if rot:
-            p = out[-1]
-            p.set_rotation((p.rotation + rot) % 360)
-    n = len(out)
-    save_doc(out, out_path, inputs=(path,))
-    out.close()
-    src.close()
+    try:
+        for k, i in enumerate(order):
+            if progress and k % 10 == 0:
+                progress(k, len(order))
+            _insert(out, src, os.path.basename(path), from_page=i, to_page=i)
+            rot = rotations.get(i, 0) % 360
+            if rot:
+                p = out[-1]
+                p.set_rotation((p.rotation + rot) % 360)
+        n = len(out)
+        if progress:
+            progress(len(order), len(order))
+        save_doc(out, out_path, inputs=(path,))
+    finally:
+        out.close()
+        src.close()
     return n
