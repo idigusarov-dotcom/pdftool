@@ -73,8 +73,11 @@ selftest("с пометкой «из интернета»", os.path.join(base, "
 try:
     import win32event
     import win32process
-    user, pw = "qa_user", "Qa-Пароль-2026!x"
-    subprocess.run(["net", "user", user, pw, "/add"], capture_output=True)
+    user, pw = "qa_user", "Qa-Passw0rd-2026!x"   # только ASCII: кириллица в «net user» портится кодировкой консоли
+    subprocess.run(["net", "user", user, "/delete"], capture_output=True)
+    add = subprocess.run(["net", "user", user, pw, "/add"], capture_output=True, text=True, errors="replace")
+    if add.returncode != 0:
+        raise OSError(f"net user /add: {add.returncode} {add.stdout} {add.stderr}")
     pub = os.path.join(os.environ.get("PUBLIC", r"C:\Users\Public"), "PdfTool QA")
     shutil.rmtree(pub, ignore_errors=True)
     os.makedirs(pub)

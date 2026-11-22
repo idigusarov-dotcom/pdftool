@@ -160,9 +160,38 @@ def btn(win, title_re, timeout=10):
     return b
 
 
+NAV = ["Подписи", "Пакет", "Фрагменты", "Сортировка", "Картинка", "Страницы", "Сжатие", "Справка"]
+NAV_FALLBACKS = []      # сколько раз кнопку боковой панели пришлось искать по положению (у 1.4.0 нет имени)
+
+
+def nav_by_position(win, label):
+    """В узком окне (экран раннера 1024×768) 1.4.0 показывает в боковой панели только значки без текста
+    и без имени для UI Automation. Тогда ищем кнопки боковой панели по положению: левый край окна, сверху вниз."""
+    wr = win.rectangle()
+    cands = []
+    for e in win.descendants(control_type="Button"):
+        r = e.rectangle()
+        if r.left - wr.left < 80 and r.width() < 80 and r.top - wr.top > 60:
+            cands.append((r.top, e))
+    cands.sort(key=lambda t: t[0])
+    if len(cands) < len(NAV):
+        raise LookupError(f"кнопок боковой панели {len(cands)}, ожидалось {len(NAV)}")
+    return cands[NAV.index(label)][1] if len(cands) == len(NAV) else cands[-len(NAV) + NAV.index(label)][1]
+
+
 def click(win, title_re, ctype="Button", timeout=10, idx=0):
     el = win.child_window(title_re=title_re, control_type=ctype, found_index=idx)
-    el.wait("exists", timeout=timeout)
+    label = title_re.strip("^$")
+    try:
+        el.wait("exists", timeout=timeout if label not in NAV else min(timeout, 3))
+    except Exception:  # noqa: BLE001
+        if ctype != "Button" or label not in NAV:
+            raise
+        e = nav_by_position(win, label)
+        NAV_FALLBACKS.append(label)
+        e.click_input()
+        time.sleep(0.5)
+        return e
     el.click_input()
     return el
 
@@ -535,6 +564,9 @@ def main():
         with open(os.path.join(OUT, "exe_report.json"), "w", encoding="utf-8") as f:
             json.dump(REPORT, f, ensure_ascii=False, indent=1, default=str)
         print(json.dumps(r, ensure_ascii=False, indent=1, default=str), flush=True)
+    REPORT["nav_fallbacks"] = len(NAV_FALLBACKS)
+    with open(os.path.join(OUT, "exe_report.json"), "w", encoding="utf-8") as f:
+        json.dump(REPORT, f, ensure_ascii=False, indent=1, default=str)
     if os.path.exists(LOG):
         shutil.copy(LOG, os.path.join(OUT, "exe_app_log.txt"))
 
