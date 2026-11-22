@@ -141,6 +141,7 @@ class MainWindow(QMainWindow):
         self.btn_more.setPopupMode(QToolButton.InstantPopup)
         self.btn_help = self._tool("circle-help", "", None)
         self.btn_help.setToolTip("Показать, куда и зачем нажимать на этом экране")
+        self.btn_help.setAccessibleName("Подсказки по этому экрану")
         self.btn_help.clicked.connect(self.start_tour)
         for b in (self.btn_undo, self.btn_redo, self.btn_theme, self.btn_more, self.btn_help):
             lay.addWidget(b)
@@ -152,6 +153,7 @@ class MainWindow(QMainWindow):
         b.setProperty("icon_name", name)
         b.setIconSize(QSize(18, 18))
         b.setToolTip(tip)
+        b.setAccessibleName(tip)           # кнопка-значок: имя для экранного диктора и UI Automation
         if slot:
             b.clicked.connect(slot)
         return b
@@ -201,6 +203,7 @@ class MainWindow(QMainWindow):
             b.setProperty("icon_on", "#ffffff")
             b.setIconSize(QSize(18, 18))
             b.setToolTip(tip)
+            b.setAccessibleName(label)     # в узком окне текста нет — имя для экранного диктора и UI Automation
             self._nav_labels[key] = label
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _=False, k=i: self.tabs.setCurrentIndex(k))

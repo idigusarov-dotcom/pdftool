@@ -61,6 +61,8 @@ def big_button(text: str, slot=None, primary: bool = False, icon_name: str | Non
         b.setIcon(style.icon(icon_name, "#ffffff" if primary else None))
     b.setCursor(Qt.PointingHandCursor)
     b.setToolTip(tip or TIPS.get(text, text))
+    if not text and b.toolTip():
+        b.setAccessibleName(b.toolTip())   # кнопка-значок без текста
     if slot:
         b.clicked.connect(slot)
     return b
@@ -540,6 +542,7 @@ def zoom_bar(view: PageView):
         b.setProperty("icon_name", name)
         b.setIconSize(QSize(16, 16))
         b.setToolTip(tip)
+        b.setAccessibleName(tip)
         b.clicked.connect(fn)
         lay.addWidget(b)
     lay.addSpacing(6)

@@ -370,3 +370,19 @@ def test_reserved_name_when_abspath_maps_to_device(tmp_path, monkeypatch):
     it = batch.BatchItem(acts_path=good, receipts_path=good, out_path=str(tmp_path / "CON.pdf"))
     errs = batch.check_items([it])
     assert any("зарезервировано" in e for e in errs) and not any("нет папки" in e for e in errs)
+
+
+def test_icon_buttons_have_accessible_names_in_compact_window(win):
+    """Узкое окно (ноутбук 1366×768 при 150%): в боковой панели только значки. У кнопок должно остаться имя
+    для экранного диктора Windows и UI Automation — иначе их «не видно» без текста."""
+    from PySide6.QtWidgets import QAbstractButton
+    win.set_compact(True)
+    for key, b in win.nav.items():
+        assert b.text() == "" and b.accessibleName(), key
+    for b in (win.btn_undo, win.btn_redo, win.btn_theme, win.btn_more, win.btn_help):
+        assert b.accessibleName()
+    win.set_compact(False)
+    assert win.nav["compress"].text() == "Сжатие"
+    unnamed = [b for b in win.findChildren(QAbstractButton)
+               if b.isVisibleTo(win) and not b.text() and not b.accessibleName() and b.toolTip()]
+    assert not unnamed, [b.toolTip() for b in unnamed][:5]
