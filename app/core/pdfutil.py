@@ -116,10 +116,30 @@ def open_pdf(path: str) -> pymupdf.Document:
         raise PdfError(f"В файле «{name}» нет ни одной страницы.")
     try:
         doc[0].bound()
+        bad_page = _first_broken_page(doc)
     except Exception as e:  # noqa: BLE001
         doc.close()
         raise PdfError(f"Не удалось прочитать страницы «{name}»: файл повреждён.") from e
+    if bad_page is not None:
+        doc.close()
+        raise PdfError(f"Файл «{name}» повреждён (не докачан или обрезан): страница {bad_page + 1} ссылается "
+                       "на данные, которых в файле нет. Пересохраните файл (например, «Печать → PDF») "
+                       "или скачайте его заново.")
     return doc
+
+
+def _first_broken_page(doc: pymupdf.Document):
+    """Номер (с 0) первой страницы, которая ссылается на отсутствующие объекты файла, иначе None.
+    Так ловится обрезанный/недокачанный PDF: MuPDF его «чинит» и открывает, но страницы пустые,
+    а объединение падает с «source object number out of range». Проверка быстрая: без отрисовки."""
+    n = doc.xref_length()
+    for i in range(len(doc)):
+        page = doc.load_page(i)
+        if not 0 < page.xref < n:
+            return i
+        if any(not 0 < x < n for x in page.get_contents()):
+            return i
+    return None
 
 
 def render_page(doc: pymupdf.Document, index: int, dpi: int = 150) -> np.ndarray:
@@ -144,16 +164,18 @@ def check_output_path(out_path: str, inputs=()) -> None:
     """Проверки до сохранения: имя задано, папка есть, это не исходный файл."""
     if not out_path or not out_path.strip():
         raise PdfError("Не указано имя файла для сохранения.")
+    if sys.platform == "win32":
+        # до abspath: на Windows 10 / Server 2022 abspath() для «…\CON.pdf» даёт «\\.\CON»,
+        # и пользователь видел бы непонятное «Папки «\\.\CON» нет»
+        bad = windows_name_problem(os.path.basename(out_path))
+        if bad:
+            raise PdfError(bad)
     for p in inputs:
         if p and same_file(p, out_path):
             raise PdfError("Нельзя сохранять поверх исходного файла. Выберите другое имя.")
     d = os.path.dirname(os.path.abspath(out_path))
     if not os.path.isdir(d):
         raise PdfError(f"Папки «{d}» нет. Выберите другую папку для сохранения.")
-    if sys.platform == "win32":
-        bad = windows_name_problem(os.path.basename(out_path))
-        if bad:
-            raise PdfError(bad)
 
 
 _WIN_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}

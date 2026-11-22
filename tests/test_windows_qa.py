@@ -316,3 +316,57 @@ def test_window_fits_small_screen(win):
     app.processEvents()
     assert fit_to_screen(win) == "centered"
     assert s.contains(win.frameGeometry().topLeft())
+
+
+# ---------- вторая проверка 1.4.0 (Windows 10 / Server 2022, обрезанный PDF) ----------
+def _truncated(tmp_path, name="битый.pdf"):
+    good = _pdf(str(tmp_path / f"целый_{name}"))
+    bad = str(tmp_path / name)
+    with open(bad, "wb") as f:
+        f.write(open(good, "rb").read()[:700])
+    return good, bad
+
+
+def test_truncated_pdf_refused_on_open(tmp_path):
+    """Обрезанный (недокачанный) PDF MuPDF «чинит» и открывает, но страницы ссылаются на отсутствующие
+    объекты. Раньше он попадал в «Объединить» и «Пакет» и падал только при сохранении."""
+    from app.core.pdfutil import PdfError, open_pdf
+    good, bad = _truncated(tmp_path)
+    open_pdf(good).close()
+    with pytest.raises(PdfError, match="повреждён") as e:
+        open_pdf(bad)
+    assert "битый.pdf" in str(e.value) and "code=" not in str(e.value)
+
+
+def test_page_without_contents_is_not_broken(tmp_path):
+    from app.core.pdfutil import open_pdf
+    d = pymupdf.open()
+    d.new_page()                     # пустая страница без /Contents — это нормальный PDF
+    p = str(tmp_path / "пустая страница.pdf")
+    d.save(p)
+    open_pdf(p).close()
+
+
+def test_batch_refuses_truncated_pair_before_start(tmp_path):
+    from app.core import batch
+    good, bad = _truncated(tmp_path)
+    it = batch.BatchItem(acts_path=good, receipts_path=bad, out_path=str(tmp_path / "итог.pdf"))
+    errs = batch.check_items([it])
+    assert errs and "битый.pdf" in errs[0]
+
+
+def test_reserved_name_when_abspath_maps_to_device(tmp_path, monkeypatch):
+    """Windows 10 / Server 2022: abspath("C:\\папка\\CON.pdf") == "\\\\.\\CON". Сообщение должно быть
+    про зарезервированное имя, а не «Папки «\\\\.\\CON» нет»."""
+    from app.core import batch, pdfutil
+    monkeypatch.setattr(pdfutil.sys, "platform", "win32")
+    monkeypatch.setattr(batch.sys, "platform", "win32")
+    real = os.path.abspath
+    monkeypatch.setattr(os.path, "abspath",
+                        lambda p: "\\\\.\\CON" if os.path.basename(str(p)).upper().startswith("CON") else real(p))
+    with pytest.raises(pdfutil.PdfError, match="зарезервировано"):
+        pdfutil.check_output_path(str(tmp_path / "CON.pdf"))
+    good = _pdf(str(tmp_path / "акты.pdf"))
+    it = batch.BatchItem(acts_path=good, receipts_path=good, out_path=str(tmp_path / "CON.pdf"))
+    errs = batch.check_items([it])
+    assert any("зарезервировано" in e for e in errs) and not any("нет папки" in e for e in errs)
