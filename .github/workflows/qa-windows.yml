@@ -17,7 +17,7 @@ jobs:
       matrix:
         os: [windows-latest, windows-2022]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 170
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
@@ -73,6 +73,16 @@ jobs:
           python qa/scenarios.py "$env:RUNNER_TEMP\QA данные" qa_out
           Write-Host "exit code: $LASTEXITCODE"
         continue-on-error: true
+      - name: Same scenarios on the fix branch (fix/windows-qa)
+        shell: pwsh
+        timeout-minutes: 45
+        run: |
+          git fetch --depth 1 origin fix/windows-qa
+          git worktree add fixed FETCH_HEAD
+          $env:QA_APP_ROOT = "$PWD\fixed"
+          $env:QA_TAG = "fixed"
+          python qa/scenarios.py "$env:RUNNER_TEMP\QA данные" qa_out_fixed
+        continue-on-error: true
       - name: Screens at 150% scale
         shell: pwsh
         timeout-minutes: 5
@@ -120,6 +130,9 @@ jobs:
             qa_out/app_log.txt
             qa_out/shots/
             qa_out_150/shots/
+            qa_out_fixed/report.json
+            qa_out_fixed/faulthandler.txt
+            qa_out_fixed/current.txt
             qa_exe/*.json
             qa_exe/*.txt
             qa_exe/exe_shots/

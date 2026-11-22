@@ -19,7 +19,7 @@ import threading
 import time
 import traceback
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = os.environ.get("QA_APP_ROOT") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "qa"))
 DATA, OUT = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
@@ -128,6 +128,12 @@ def wait_until(cond, timeout=120.0):
             return True
         time.sleep(0.02)
     return False
+
+
+def frozen():
+    """Сколько окно максимум не обрабатывало события (после последней операции)."""
+    pump(0.15)
+    return BEAT["max"]
 
 
 def wait_idle(timeout=300.0):
@@ -341,7 +347,7 @@ def s_merge(c: Ctx):
     BEAT["max"] = 0
     t = time.monotonic()
     p.do_merge(c.p("большой объединённый.pdf"))
-    c.note(f"объединение 340 стр. (~75 МБ): {time.monotonic() - t:.1f} с, окно не отвечало {BEAT['max']:.1f} с")
+    c.note(f"объединение 340 стр. (~75 МБ): {time.monotonic() - t:.1f} с, окно не отвечало {frozen():.1f} с")
 
 
 @scenario("pages_edit", "Страницы: поворот, удаление, порядок, диапазоны (крайние случаи), каждая отдельно")
@@ -406,14 +412,14 @@ def s_pages(c: Ctx):
     t = time.monotonic()
     p.split_every(d3)
     c.check(len(os.listdir(d3)) == 320, f"320 файлов ({len(os.listdir(d3))})")
-    c.note(f"«каждая отдельно» на 320 стр.: {time.monotonic() - t:.1f} с, окно не отвечало {BEAT['max']:.1f} с")
+    c.note(f"«каждая отдельно» на 320 стр.: {time.monotonic() - t:.1f} с, окно не отвечало {frozen():.1f} с")
     # поворот всех и сохранение большого
     p.grid.selectAll()
     p.rotate(180)
     BEAT["max"] = 0
     t = time.monotonic()
     p.save(c.p("большой повёрнут.pdf"))
-    c.note(f"сохранение 320 стр. с поворотом: {time.monotonic() - t:.1f} с, окно не отвечало {BEAT['max']:.1f} с")
+    c.note(f"сохранение 320 стр. с поворотом: {time.monotonic() - t:.1f} с, окно не отвечало {frozen():.1f} с")
     # удалить всё
     p.grid.selectAll()
     p.delete()
@@ -446,7 +452,7 @@ def s_image(c: Ctx):
     t = time.monotonic()
     big_out = c.p("большой с печатью.pdf")
     im.save(big_out)
-    c.note(f"печать на 320 стр.: {time.monotonic() - t:.1f} с, окно не отвечало {BEAT['max']:.1f} с")
+    c.note(f"печать на 320 стр.: {time.monotonic() - t:.1f} с, окно не отвечало {frozen():.1f} с")
     c.check(os.path.exists(big_out), "результат на 320 стр. сохранён")
     # отмена из окна хода
     from PySide6.QtWidgets import QProgressDialog
@@ -635,7 +641,7 @@ def s_compress(c: Ctx):
             dt = time.monotonic() - t
             sz = os.path.getsize(out) if os.path.exists(out) else 0
             c.note(f"{key} {lv}: {os.path.getsize(D(key)) / 1e6:.1f} → {sz / 1e6:.1f} МБ за {dt:.1f} с, "
-                   f"память до {PEAK['rss'] / 1e6:.0f} МБ, окно не отвечало {BEAT['max']:.1f} с")
+                   f"память до {PEAK['rss'] / 1e6:.0f} МБ, окно не отвечало {frozen():.1f} с")
             if not sz:
                 c.check("Меньше не стало" in cz.lbl_sizes.text(), f"{key} {lv}: не стало меньше — сказано прямо")
             else:
@@ -891,10 +897,12 @@ def main():
         BEAT["last"] = time.monotonic()
         t0 = time.monotonic()
         status, tb = "ok", ""
+        faulthandler.dump_traceback_later(900, exit=True, file=_fh)   # зависание сценария — стек и выход
         try:
             fn(c)
         except Exception:  # noqa: BLE001
             status, tb = "exception", traceback.format_exc()
+        faulthandler.cancel_dump_traceback_later()
         pump(0.3)
         failed = [m for ok, m in c.checks if not ok]
         unh = UNHANDLED[n_unh:]
