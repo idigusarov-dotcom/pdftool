@@ -620,6 +620,23 @@ def _follow_system_theme(app, w):
         pass
 
 
+def fit_to_screen(w) -> str:
+    """Окно 1366×768 не помещается на ноутбуке 1366×768 (панель задач) или при масштабе 125–150%:
+    низ с кнопкой «Сохранить» уходил под панель задач, заголовок — за верх экрана. Если окно больше
+    свободной части экрана — разворачиваем его, иначе ставим по центру."""
+    scr = w.screen() or QApplication.primaryScreen()
+    if scr is None:
+        return "no-screen"
+    s = scr.availableGeometry()
+    fg = w.frameGeometry()
+    if fg.width() > s.width() or fg.height() > s.height():
+        w.showMaximized()
+        return "maximized"
+    fg.moveCenter(s.center())
+    w.move(fg.topLeft())
+    return "centered"
+
+
 def main() -> int:
     if len(sys.argv) >= 2 and sys.argv[1] == "--self-test":   # проверка сборки (CI, поддержка)
         from .selftest import run
@@ -638,6 +655,7 @@ def main() -> int:
     w = MainWindow()
     _follow_system_theme(app, w)
     w.show()
+    fit_to_screen(w)
     app.set_window(w)
     args = [a for a in sys.argv[1:] if not a.startswith("-") and os.path.isfile(a)]
     if args:       # «Открыть с помощью» на Windows передаёт файлы в командной строке

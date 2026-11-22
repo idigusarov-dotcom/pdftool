@@ -282,3 +282,37 @@ def test_pages_ops_use_progress_and_cancel(win, tmp_path):
         pg.split = orig
     assert 0 < len(os.listdir(d2)) < 40
     assert any("Остановлено" in t for _, t in win.toasts)
+
+
+def test_locked_input_says_locked(tmp_path, monkeypatch):
+    """Файл, занятый другой программой без общего доступа (на Windows так держит файл, например,
+    программа сканера), раньше назывался «повреждён или это не PDF»."""
+    import builtins
+    from app.core.pdfutil import PdfError, open_pdf
+    src = _pdf(str(tmp_path / "занят.pdf"))
+    real_open = builtins.open
+
+    def fake_open(p, *a, **k):
+        if str(p) == src:
+            raise PermissionError(13, "Permission denied")
+        return real_open(p, *a, **k)
+    monkeypatch.setattr(builtins, "open", fake_open)
+    with pytest.raises(PdfError, match="открыт в другой программе"):
+        open_pdf(src)
+
+
+def test_window_fits_small_screen(win):
+    """На экране меньше окна (ноутбук 1366×768 с панелью задач, масштаб 150%) окно разворачивается,
+    кнопки внизу не уходят под панель задач."""
+    from app.main import fit_to_screen
+    s = win.screen().availableGeometry()
+    win.showNormal()
+    win.resize(s.width() + 300, s.height() + 200)
+    app.processEvents()
+    assert fit_to_screen(win) == "maximized"
+    app.processEvents()
+    win.showNormal()
+    win.resize(max(300, s.width() // 2), max(300, s.height() // 2))
+    app.processEvents()
+    assert fit_to_screen(win) == "centered"
+    assert s.contains(win.frameGeometry().topLeft())

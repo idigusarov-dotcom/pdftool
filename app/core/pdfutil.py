@@ -93,6 +93,14 @@ def open_pdf(path: str) -> pymupdf.Document:
     if os.path.getsize(path) == 0:
         raise PdfError(f"Файл «{name}» пустой (0 байт). Скорее всего, он не докачался или повреждён.")
     try:
+        with open(path, "rb") as f:       # занят без общего доступа / нет прав — это не «повреждён»
+            f.read(8)
+    except PermissionError as e:
+        raise PdfError(f"Файл «{name}» сейчас нельзя прочитать: он открыт в другой программе без общего "
+                       "доступа или нет прав на чтение. Закройте его там и попробуйте снова.") from e
+    except OSError as e:
+        raise PdfError(f"Файл «{name}» не читается: {e.strerror or e}.") from e
+    try:
         doc = pymupdf.open(path)
     except Exception as e:  # noqa: BLE001
         raise PdfError(f"Не удалось открыть «{name}»: файл повреждён или это не PDF.") from e
