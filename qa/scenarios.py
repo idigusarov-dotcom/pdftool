@@ -757,7 +757,11 @@ def s_paths(c: Ctx):
         msgs = TOASTS[n0:]
         exists = bool(out) and os.path.exists(out)
         txt = msgs[-1][1].replace("\n", " ")[:160] if msgs else "—"
-        if expect_ok:
+        if expect_ok is None:
+            c.note(f"{label}: {'сохранено' if exists else 'не сохранено'} — «{txt}»")
+            if any(x in txt for x in ("code=", "Errno", "Папки «\\\\.")):
+                c.check(False, f"{label}: непонятное сообщение «{txt}»")
+        elif expect_ok:
             c.check(exists, f"{label}: сохранено ({txt})")
         else:
             bad = [m for m in msgs if m[0] == "error"]

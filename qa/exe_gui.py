@@ -105,7 +105,7 @@ class App:
         while time.monotonic() - t < timeout:
             for w in Desktop(backend="uia").windows(title_re=TITLE):
                 if w.process_id() in self.pids():
-                    self.win = w
+                    self.win = Desktop(backend="uia").window(handle=w.handle)
                     self.startup = time.monotonic() - self.t0
                     time.sleep(1.0)
                     return w
@@ -142,7 +142,10 @@ class App:
 def shot(app_or_win, name):
     try:
         w = app_or_win.win if isinstance(app_or_win, App) else app_or_win
-        w.set_focus()
+        try:
+            w.set_focus()
+        except Exception:  # noqa: BLE001
+            pass
         time.sleep(0.4)
         r = w.rectangle()
         ImageGrab.grab(bbox=(r.left, r.top, r.right, r.bottom), all_screens=True).save(
@@ -341,7 +344,8 @@ def f_compress(r):
     b.click_input(double=True)
     r["checks"].append(("окно «Сохранить как» появилось", file_dialog(out)))
     time.sleep(2)
-    prog = [w for w in Desktop(backend="uia").windows(title="Подождите") if w.process_id() in a.pids()]
+    prog = [Desktop(backend="uia").window(handle=w.handle) for w in Desktop(backend="uia").windows(title="Подождите")
+            if w.process_id() in a.pids()]
     if prog:
         shot(prog[0], "07_progress_compress")
     # пока идёт: щёлкнуть ещё раз по кнопке и по пункту меню — окно хода должно это заблокировать
@@ -371,7 +375,8 @@ def f_compress(r):
             if w.process_id() in a.pids():
                 time.sleep(1)
                 try:
-                    w.child_window(title="Отмена", control_type="Button").click_input()
+                    Desktop(backend="uia").window(handle=w.handle).child_window(
+                        title="Отмена", control_type="Button").click_input()
                     cancelled = True
                 except Exception:  # noqa: BLE001
                     pass

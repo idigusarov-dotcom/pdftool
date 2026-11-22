@@ -71,7 +71,6 @@ with open(motw + ":Zone.Identifier", "w") as f:
 selftest("с пометкой «из интернета»", os.path.join(base, "motw"), exe=motw)
 # 5. обычный пользователь без прав администратора
 try:
-    import win32con
     import win32event
     import win32process
     user, pw = "qa_user", "Qa-Пароль-2026!x"
@@ -83,13 +82,32 @@ try:
     exe_pub = os.path.join(pub, "PdfTool.exe")
     shutil.copy(EXE, exe_pub)
     outd = os.path.join(pub, "самопроверка обычного пользователя")
-    si = win32process.STARTUPINFO()
+    import ctypes
+    from ctypes import wintypes
+
+    class STARTUPINFO(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("lpReserved", wintypes.LPWSTR), ("lpDesktop", wintypes.LPWSTR),
+                    ("lpTitle", wintypes.LPWSTR), ("dwX", wintypes.DWORD), ("dwY", wintypes.DWORD),
+                    ("dwXSize", wintypes.DWORD), ("dwYSize", wintypes.DWORD), ("dwXCountChars", wintypes.DWORD),
+                    ("dwYCountChars", wintypes.DWORD), ("dwFillAttribute", wintypes.DWORD),
+                    ("dwFlags", wintypes.DWORD), ("wShowWindow", wintypes.WORD), ("cbReserved2", wintypes.WORD),
+                    ("lpReserved2", ctypes.c_void_p), ("hStdInput", wintypes.HANDLE),
+                    ("hStdOutput", wintypes.HANDLE), ("hStdError", wintypes.HANDLE)]
+
+    class PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [("hProcess", wintypes.HANDLE), ("hThread", wintypes.HANDLE),
+                    ("dwProcessId", wintypes.DWORD), ("dwThreadId", wintypes.DWORD)]
+    si = STARTUPINFO()
+    si.cb = ctypes.sizeof(si)
+    pi = PROCESS_INFORMATION()
+    cmd = ctypes.create_unicode_buffer(f'"{exe_pub}" --self-test "{outd}"')
     t = time.monotonic()
-    hp, ht, pid, tid = win32process.CreateProcessWithLogonW(
-        user, ".", pw, win32con.LOGON_WITH_PROFILE, exe_pub, f'"{exe_pub}" --self-test "{outd}"',
-        0, None, pub, si)
-    win32event.WaitForSingleObject(hp, 240000)
-    rc = win32process.GetExitCodeProcess(hp)
+    ok = ctypes.windll.advapi32.CreateProcessWithLogonW(user, ".", pw, 1, exe_pub, cmd, 0, None, pub,
+                                                        ctypes.byref(si), ctypes.byref(pi))
+    if not ok:
+        raise OSError(f"CreateProcessWithLogonW: {ctypes.GetLastError()}")
+    win32event.WaitForSingleObject(int(pi.hProcess), 240000)
+    rc = win32process.GetExitCodeProcess(int(pi.hProcess))
     js = os.path.join(outd, "selftest.json")
     res = {"exit": rc, "sec": round(time.monotonic() - t, 1)}
     groups = subprocess.run(["net", "user", user], capture_output=True, text=True, errors="replace").stdout
