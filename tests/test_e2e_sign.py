@@ -3,20 +3,15 @@
 Проверяется СОДЕРЖИМОЕ результата: чья подпись стоит в каждой расписке и где."""
 import os
 
-os.environ["PDFTOOL_SETTINGS"] = "PdfToolTestE2E"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QDialog  # noqa: E402
 
 from app.core import signatures as sig  # noqa: E402
 from app.core.pdfutil import NRect  # noqa: E402
-from e2e_lib import ink_in, page_count, pump, shot, wait_until, which_act  # noqa: E402
+from e2e_lib import app, ink_in, page_count, pump, recognize, shot, wait_until, which_act  # noqa: E402,F401
 
-app = QApplication.instance() or QApplication([])
-QMessageBox.information = staticmethod(lambda *a, **k: None)
-QMessageBox.warning = staticmethod(lambda *a, **k: None)
-QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
 
 CASES = {
     "clean": dict(apartments=["14", "27", "35", "48", "52"], receipts=["35", "14", "52", "48", "27"]),
@@ -32,37 +27,6 @@ CASES = {
 
 def pair(fake, name):
     return fake(name, fake.Scenario(**CASES[name]))
-
-
-@pytest.fixture
-def win(monkeypatch, tmp_path):
-    monkeypatch.setenv("PDFTOOL_TEMPLATES", str(tmp_path / "tpl"))
-    from app.main import MainWindow
-    from app.ui.infra import settings
-    settings().clear()
-    w = MainWindow()
-    w.resize(1400, 900)
-    w.toasts_seen = []
-    orig = w.toast
-
-    def toast(text, kind="info", **k):
-        w.toasts_seen.append((kind, text))
-        return orig(text, kind, **k)
-    w.toast = toast
-    w.show()
-    yield w
-    for t in w.all_tabs():
-        t.undo_stack.setClean()
-    w.close()
-
-
-def recognize(w, s):
-    n = len(w.toasts_seen)
-    s.recognize()
-    assert wait_until(app, lambda: any("Сопоставлено" in t or "распознать" in t
-                                       for _, t in w.toasts_seen[n:]), 180), "распознавание не закончилось"
-    pump(app, 0.2)
-    return [t for _, t in w.toasts_seen[n:] if "Сопоставлено" in t][0]
 
 
 def same(a, b, tol=2e-3):

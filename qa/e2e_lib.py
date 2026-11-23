@@ -13,6 +13,15 @@ from app.core.pdfutil import NRect
 
 SHOTS = os.environ.get("PDFTOOL_E2E_SHOTS", "")       # папка для снимков экрана (необязательно)
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+
+app = QApplication.instance() or QApplication([])
+# окна-сообщения в проверках не ждут нажатия: «ОК»/«Да»
+QMessageBox.information = staticmethod(lambda *a, **k: None)
+QMessageBox.warning = staticmethod(lambda *a, **k: None)
+QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+
 
 def pump(app, sec=0.2):
     t = time.time()
@@ -108,3 +117,17 @@ def which_act(out_pdf, rec_page, dst_rect, acts_pdf, act_pages, src_rect, kind="
 def page_count(path) -> int:
     with pymupdf.open(path) as d:
         return len(d)
+
+
+def toasts_after(w, n, word=""):
+    return [t for _, t in w.toasts_seen[n:] if word in t]
+
+
+def recognize(w, s, timeout=180):
+    """Нажать «Распознать номера» на экране подписей и дождаться итогового сообщения."""
+    n = len(w.toasts_seen)
+    s.recognize()
+    assert wait_until(app, lambda: any("Сопоставлено" in t or "распознать" in t
+                                       for _, t in w.toasts_seen[n:]), timeout), "распознавание не закончилось"
+    pump(app, 0.2)
+    return toasts_after(w, n, "Сопоставлено")[0]
