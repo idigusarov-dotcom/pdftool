@@ -26,7 +26,7 @@ class TransferJob:
     src_overrides: dict[int, NRect] = field(default_factory=dict)   # по странице акта
     dst_overrides: dict[int, NRect] = field(default_factory=dict)   # по странице расписки
     dpi: int = 200
-    uniform_color: bool = True
+    uniform_color: bool = True  # единый синий/чёрный; в экране «Подписи» галочка «Сохранить настоящий цвет» снимает это
     trim_left: bool = True   # прижать подпись к левому краю целевой области
     ink_mode: str = "blue"   # blue / black / any
     sensitivity: float = 0.5

@@ -131,7 +131,9 @@ class SignTab(QWidget, UndoMixin):
         draw = QHBoxLayout()
         draw.addWidget(QLabel("Цвет чернил:"))
         self.cb_mode = QComboBox()
-        self.cb_mode.setToolTip("Какой ручкой подписывались: синяя — обычно; чёрная — убирает линии бланка")
+        self.cb_mode.setToolTip("Синяя — синие, голубые, фиолетовые и гелевые.\n"
+                                "Чёрная — чёрная ручка и карандаш, убирает линии бланка.\n"
+                                "Любая — все цвета, включая красную и зелёную (линии бланка тоже убираются).")
         for k, v in INK_MODES.items():
             self.cb_mode.addItem(v, k)
         self.cb_mode.setCurrentIndex(max(0, self.cb_mode.findData(s.value("sign/ink_mode", "blue"))))
@@ -145,6 +147,12 @@ class SignTab(QWidget, UndoMixin):
         self.sl_sens.setToolTip("Больше — захватывает бледные штрихи, меньше — меньше лишних точек")
         self.sl_sens.valueChanged.connect(self.ink_changed)
         draw.addWidget(self.sl_sens)
+        self.chk_keep = QCheckBox("Сохранить настоящий цвет")
+        self.chk_keep.setChecked(str(s.value("sign/keep", "true")) == "true")
+        self.chk_keep.setToolTip("Оставить цвет ручки, каким он был на скане.\n"
+                                 "Если снять галочку, все штрихи станут одним цветом (синим или чёрным).")
+        self.chk_keep.toggled.connect(self.ink_changed)
+        draw.addWidget(self.chk_keep)
         draw.addStretch()
         self.btn_reset = big_button("↺ Рамки по умолчанию", self.reset_rects)
         draw.addWidget(self.btn_reset)
@@ -174,7 +182,8 @@ class SignTab(QWidget, UndoMixin):
         if not j:
             return None
         return dict(mapping=list(j.mapping), src=j.src_rect, dst=j.dst_rect, so=dict(j.src_overrides),
-                    do=dict(j.dst_overrides), mode=j.ink_mode, sens=j.sensitivity)
+                    do=dict(j.dst_overrides), mode=j.ink_mode, sens=j.sensitivity,
+                    keep=not j.uniform_color)
 
     def set_state(self, st):
         if not st or not self.job:
@@ -183,11 +192,13 @@ class SignTab(QWidget, UndoMixin):
         j.mapping, j.src_rect, j.dst_rect = list(st["mapping"]), st["src"], st["dst"]
         j.src_overrides, j.dst_overrides = dict(st["so"]), dict(st["do"])
         j.ink_mode, j.sensitivity = st["mode"], st["sens"]
+        j.uniform_color = not st.get("keep", True)
         self._loading = True
         for r, m in enumerate(j.mapping):
             self.table.cellWidget(r, C_ACT).setCurrentIndex(0 if m is None else m + 1)
         self.cb_mode.setCurrentIndex(max(0, self.cb_mode.findData(j.ink_mode)))
         self.sl_sens.setValue(int(j.sensitivity * 100))
+        self.chk_keep.setChecked(not j.uniform_color)
         self._loading = False
         self.refresh_marks()
         self.show_row(self.table.currentRow())
@@ -234,7 +245,8 @@ class SignTab(QWidget, UndoMixin):
                                    src_rect=load_rect("sign/src", sig.DEFAULT_SRC_RECT),
                                    dst_rect=load_rect("sign/dst", sig.DEFAULT_DST_RECT),
                                    ink_mode=str(s.value("sign/ink_mode", "blue")),
-                                   sensitivity=float(s.value("sign/sens", 50)) / 100)
+                                   sensitivity=float(s.value("sign/sens", 50)) / 100,
+                                   uniform_color=str(s.value("sign/keep", "true")) != "true")
         self.conf = [None] * len(self.rec)
         self.table.setRowCount(len(self.rec))
         ph = placeholder_icon()
@@ -419,8 +431,9 @@ class SignTab(QWidget, UndoMixin):
             Step(self.tbar, "Шаблоны бланков", "Настроили рамки — нажмите «Сохранить» и дайте имя, например "
                  "«Акт ЦО». В следующий раз выберите шаблон в списке, и всё встанет само. "
                  "«Экспорт» — файл шаблона для другого компьютера.", adv),
-            Step(self.cb_mode, "Цвет чернил", "Если подписывались чёрной ручкой — выберите «чёрная». Ползунок "
-                 "«Чувствительность» правее: больше — берёт бледные штрихи.", adv),
+            Step(self.cb_mode, "Цвет чернил", "Синяя — синие, голубые, фиолетовые. Чёрная — чёрная ручка и карандаш. "
+                 "Любая — все цвета, в том числе красная и зелёная. Галочка «Сохранить настоящий цвет» "
+                 "оставляет цвет ручки; ползунок правее берёт более бледные штрихи.", adv),
             Step(self.btn_preview, "Предпросмотр", "Покажет все расписки с подписями, ничего не сохраняя."),
             Step(self.btn_save, "3. Сохраните", "Создаёт новый PDF с подписями. Программа предложит имя рядом с "
                  "исходным файлом. Ошиблись — Ctrl + Z отменяет последнее действие."),
@@ -432,7 +445,8 @@ class SignTab(QWidget, UndoMixin):
         t = tp.Template(name, src_rect=j.src_rect if j else load_rect("sign/src", sig.DEFAULT_SRC_RECT),
                         dst_rect=j.dst_rect if j else load_rect("sign/dst", sig.DEFAULT_DST_RECT),
                         zones_act=[self.zone_act], zones_rec=[self.zone_rec],
-                        ink_mode=self.cb_mode.currentData(), sensitivity=self.sl_sens.value() / 100)
+                        ink_mode=self.cb_mode.currentData(), sensitivity=self.sl_sens.value() / 100,
+                        keep_colors=self.chk_keep.isChecked())
         r, a = self.current()
         if self.acts is not None:
             t.fp_act = tp.fingerprint(self.acts, a if a is not None else 0)
@@ -452,11 +466,13 @@ class SignTab(QWidget, UndoMixin):
         self._loading = True
         self.cb_mode.setCurrentIndex(max(0, self.cb_mode.findData(t.ink_mode)))
         self.sl_sens.setValue(int(round(t.sensitivity * 100)))
+        self.chk_keep.setChecked(getattr(t, "keep_colors", True))
         self._loading = False
         if self.job:
             self.job.src_rect = t.src_rect or self.job.src_rect
             self.job.dst_rect = t.dst_rect or self.job.dst_rect
             self.job.ink_mode, self.job.sensitivity = t.ink_mode, t.sensitivity
+            self.job.uniform_color = not getattr(t, "keep_colors", True)
             self.show_row(self.table.currentRow())
             self.commit("шаблон «%s»" % t.name)
 
@@ -555,8 +571,10 @@ class SignTab(QWidget, UndoMixin):
             return
         self.job.ink_mode = self.cb_mode.currentData()
         self.job.sensitivity = self.sl_sens.value() / 100
+        self.job.uniform_color = not self.chk_keep.isChecked()
         settings().setValue("sign/ink_mode", self.job.ink_mode)
         settings().setValue("sign/sens", self.sl_sens.value())
+        settings().setValue("sign/keep", "true" if self.chk_keep.isChecked() else "false")
         self._ink_timer.start()
         self.commit("чернила")
 

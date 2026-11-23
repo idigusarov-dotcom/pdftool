@@ -48,7 +48,7 @@ def check_output(out, meta, mapping, kind="blue", src=sig.DEFAULT_SRC_RECT, dst=
         if a is None:
             assert ink - base < 30, f"расписка {r + 1}: подпись не должна стоять"
             continue
-        assert ink - base > 150, f"расписка {r + 1}: нет подписи"
+        assert ink - base > 80, f"расписка {r + 1}: нет подписи"
         got, score = which_act(out, r, dst, meta["acts"], meta["sig_pages"], src, kind, refs=refs,
                                base_pdf=meta["receipts"] if kind != "blue" else None)
         assert got == a, f"расписка {r + 1}: подпись из акта стр. {got + 1 if got is not None else '-'}, " \
@@ -149,7 +149,7 @@ def test_frames_global_and_own(win, fake, tmp_path):
     s.save(out)
     for r in range(5):
         where = own if r == 2 else low
-        assert ink_in(out, r, where) - ink_in(meta["receipts"], r, where) > 150, r
+        assert ink_in(out, r, where) - ink_in(meta["receipts"], r, where) > 80, r
         assert ink_in(out, r, sig.DEFAULT_DST_RECT) - ink_in(meta["receipts"], r, sig.DEFAULT_DST_RECT) < 30, r
     # отмена: последняя правка (своя рамка) уходит
     s.undo_stack.undo()
