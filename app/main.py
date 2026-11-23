@@ -329,7 +329,7 @@ class MainWindow(QMainWindow):
         self.refresh_steps()
         if key == "help":
             self.helppage.refresh()
-        QTimer.singleShot(300, lambda: self.offer_tour(key))
+        QTimer.singleShot(300, self, lambda: self.offer_tour(key))
 
     def refresh_steps(self):
         w = self.current()
