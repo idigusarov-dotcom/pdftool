@@ -339,9 +339,9 @@ class FragmentTab(QWidget, UndoMixin):
     def _retouch_ui(self):
         self.btn_retouch.setEnabled(self.cur_rgba is not None)
         n = len(self.cur_retouch)
-        self.lbl_retouch.setText(f"Ручных правок: {n} — сохраняются при смене чувствительности и режима" if n
-                                 else "")
-        self.lbl_retouch.setWordWrap(True)
+        self.lbl_retouch.setText(f"Ручных правок: {n}" if n else "")
+        self.lbl_retouch.setToolTip("Правки сохраняются при смене чувствительности, режима и рамки; "
+                                    "сбрасываются при смене страницы или файла «Откуда»")
         self.lbl_retouch.setVisible(bool(n))
 
     def _drop_retouch(self, why: str):

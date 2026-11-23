@@ -23,7 +23,7 @@ BRUSH_MIN, BRUSH_MAX, BRUSH_DEFAULT = 2, 120, 14   # радиус кисти в 
 
 def checker(h: int, w: int, dark: bool, cell: int = 10) -> np.ndarray:
     yy, xx = np.mgrid[:h, :w]
-    a, b = (70, 52) if dark else (240, 208)
+    a, b = (214, 186) if dark else (240, 208)   # светлые клетки и в тёмной теме: чернила тёмные
     v = np.where(((yy // cell + xx // cell) % 2) == 0, a, b).astype(np.uint8)
     return np.dstack([v, v, v])
 
@@ -150,7 +150,12 @@ class RetouchDialog(QDialog):
                       "штрихи — из исходного скана, другим цветом рисовать нельзя.")
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
-        lay.addWidget(hint)
+        top = QHBoxLayout()
+        top.addWidget(hint, 1)
+        self.lbl_count = QLabel()
+        self.lbl_count.setObjectName("Muted")
+        top.addWidget(self.lbl_count, 0, Qt.AlignTop)
+        lay.addLayout(top)
 
         tools = QHBoxLayout()
         tools.setSpacing(8)
@@ -162,7 +167,7 @@ class RetouchDialog(QDialog):
         for b in (self.btn_erase, self.btn_restore):
             self.grp.addButton(b)
             tools.addWidget(b)
-        self.grp.buttonToggled.connect(lambda *_: self._update_cursor_color())
+        self.grp.buttonToggled.connect(lambda *_: self._tool_changed())
         tools.addSpacing(10)
         tools.addWidget(QLabel("Размер:"))
         self.sl_size = QSlider(Qt.Horizontal)
@@ -207,9 +212,7 @@ class RetouchDialog(QDialog):
                                   tip="По размеру окна (Ctrl + 0). Масштаб — Ctrl + колесо мыши")
         for b in (self.btn_undo, self.btn_redo, self.btn_fit, self.btn_reset):
             bottom.addWidget(b)
-        self.lbl_count = QLabel()
-        self.lbl_count.setObjectName("Muted")
-        bottom.addWidget(self.lbl_count, 1)
+        bottom.addStretch(1)
         self.btn_cancel = big_button("Отмена", self.reject, tip="Закрыть без изменений (Esc)")
         self.btn_ok = big_button("Готово", self.accept, primary=True, icon_name="check",
                                  tip="Применить правки к фрагменту")
@@ -236,7 +239,7 @@ class RetouchDialog(QDialog):
         else:
             self.resize(900, 600)
         self._size_changed(self.sl_size.value())
-        self._update_cursor_color()
+        self._tool_changed()
         self._render()
 
     # ---------- кнопки ----------
@@ -258,6 +261,16 @@ class RetouchDialog(QDialog):
 
     def tool(self) -> str:
         return rt.RESTORE if self.btn_restore.isChecked() else rt.ERASE
+
+    def _tool_changed(self):
+        """Выбранный инструмент — синяя кнопка (как основная), второй — обычная."""
+        for b in (self.btn_erase, self.btn_restore):
+            on = b.isChecked()
+            b.setProperty("kind", "primary" if on else "secondary")
+            b.setIcon(style.icon(b.property("icon_name"), "#ffffff" if on else None))
+            b.style().unpolish(b)
+            b.style().polish(b)
+        self._update_cursor_color()
 
     def _update_cursor_color(self):
         self.view.set_cursor_color("#e53935" if self.tool() == rt.ERASE else style.colors()["accent"])
