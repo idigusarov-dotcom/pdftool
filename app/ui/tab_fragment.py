@@ -40,6 +40,7 @@ class FragmentTab(QWidget, UndoMixin):
         self.cur_rgba: np.ndarray | None = None
         self.cur_frac = (0.0, 0.0, 1.0, 1.0)
         self.cur_retouch: tuple = ()      # ручные правки текущего фрагмента (мазки ластика / кисти)
+        self._ink = None                  # (файл, страница, где чернила на «Откуда») — для масштаба на «Куда»
         self._retouch_page = None         # страница-источник, к которой относятся правки
         self._loading = False
         self._saved = False
@@ -209,6 +210,7 @@ class FragmentTab(QWidget, UndoMixin):
             self.view_src.remove_box("main")
             self.view_dst.remove_box("main")
             self.cur_rgba = None
+            self._ink = None
             self.lbl_prev.clear()
         self._retouch_ui()
 
@@ -315,12 +317,20 @@ class FragmentTab(QWidget, UndoMixin):
         pm = np_to_pixmap(self.cur_rgba)
         page_rect = self.dst[self.sp_dst.value() - 1].rect
         nat = fr.natural_rect(self.src, self.sp_src.value() - 1, nr, self.cur_frac, page_rect)
+        new_ink = (self.src_path, self.sp_src.value() - 1, fr.ink_rect(nr, self.cur_frac))
+        prev_ink, self._ink = self._ink, new_ink
         if old is None:
             target = nat
-        else:   # оставляем место и ширину, высоту подгоняем под пропорции фрагмента
+        elif keep_dst is not None:
+            target = keep_dst
+        elif prev_ink is not None:
+            # тот же масштаб: стёрли край ластиком / сменили чувствительность — оставшиеся чернила не
+            # растягиваются и не сдвигаются (раньше держалась ширина рамки, и фрагмент «вырастал»)
+            target = fr.follow_rect(old, prev_ink[2], new_ink[2], same_source=prev_ink[:2] == new_ink[:2])
+        else:   # рамка «Куда» без известного масштаба: место и ширина, высота — по пропорциям фрагмента
             w = old.x1 - old.x0
             asp = (nat.y1 - nat.y0) / max(nat.x1 - nat.x0, 1e-6)
-            target = NRect(old.x0, old.y0, old.x0 + w, old.y0 + w * asp) if keep_dst is None else keep_dst
+            target = NRect(old.x0, old.y0, old.x0 + w, old.y0 + w * asp)
         self.view_dst.set_nrect(target, pm, emit=False)
         if not self._restoring and keep_dst is None:
             self.commit("фрагмент")
@@ -399,6 +409,7 @@ class FragmentTab(QWidget, UndoMixin):
         self.view_src.remove_box("main")
         self.view_dst.remove_box("main")
         self.cur_rgba = None
+        self._ink = None
         self.cur_retouch, self._retouch_page = (), None
         self.lbl_prev.clear()
         self._retouch_ui()
