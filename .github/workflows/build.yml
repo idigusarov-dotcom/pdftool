@@ -13,7 +13,7 @@ permissions:
 jobs:
   linux-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -32,7 +32,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -42,10 +42,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt -c constraints.txt
-      - name: Tests (без реальных PDF часть тестов пропускается)
+      - name: Tests (без реальных PDF часть тестов пропускается; сквозные — на выдуманных сканах)
         env:
           QT_QPA_PLATFORM: offscreen
+          PDFTOOL_E2E_SHOTS: e2e-shots
         run: python -m pytest -q -rs tests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-shots-windows
+          path: e2e-shots/
+          if-no-files-found: ignore
       - name: Build exe
         run: pyinstaller --noconfirm --clean pdftool.spec
       - name: Smoke test exe (запуск собранного PdfTool.exe, самопроверка, снимки окна)
@@ -108,10 +115,17 @@ jobs:
           pip install -r requirements-dev.txt -c constraints-macos.txt
           pip install dmgbuild -c constraints-macos.txt
           python -c "import platform, PySide6, pymupdf, numpy; print(platform.machine(), platform.mac_ver()[0], PySide6.__version__, pymupdf.VersionBind, numpy.__version__)"
-      - name: Tests
+      - name: Tests (вместе со сквозными проверками всех экранов на выдуманных сканах)
         env:
           QT_QPA_PLATFORM: offscreen
+          PDFTOOL_E2E_SHOTS: e2e-shots
         run: python -m pytest -q -rs tests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-shots-macos-${{ matrix.arch }}
+          path: e2e-shots/
+          if-no-files-found: ignore
       - name: Build PdfTool.app
         run: |
           pyinstaller --noconfirm --clean pdftool.spec

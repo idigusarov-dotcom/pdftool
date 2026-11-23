@@ -51,6 +51,7 @@ class Template:
     zones_rec: list[NRect] = field(default_factory=list)
     ink_mode: str = "blue"
     sensitivity: float = 0.5
+    keep_colors: bool = True
     fp_act: Optional[list[float]] = None                # отпечаток бланка акта
     fp_rec: Optional[list[float]] = None                # отпечаток бланка расписки
 
@@ -60,6 +61,7 @@ class Template:
                 "src_rect": _l(self.src_rect), "dst_rect": _l(self.dst_rect),
                 "zones_act": [_l(z) for z in self.zones_act], "zones_rec": [_l(z) for z in self.zones_rec],
                 "ink_mode": self.ink_mode, "sensitivity": float(self.sensitivity),
+                "keep_colors": bool(self.keep_colors),
                 "fp_act": self.fp_act, "fp_rec": self.fp_rec}
 
     @staticmethod
@@ -70,6 +72,7 @@ class Template:
                         zones_act=[_r(z) for z in d.get("zones_act") or []],
                         zones_rec=[_r(z) for z in d.get("zones_rec") or []],
                         ink_mode=d.get("ink_mode", "blue"), sensitivity=float(d.get("sensitivity", 0.5)),
+                        keep_colors=bool(d.get("keep_colors", True)),
                         fp_act=d.get("fp_act"), fp_rec=d.get("fp_rec"))
 
 

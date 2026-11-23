@@ -7,6 +7,12 @@ import numpy as np
 from PIL import Image
 
 DEFAULT_INK_RGB = (28, 48, 160)  # единый цвет "шариковой ручки"
+BLACK_INK_RGB = (32, 32, 36)     # единый цвет для чёрной ручки / карандаша
+
+
+def ink_color_for(mode: str):
+    """Единый цвет чернил («настоящий цвет» выключен): чёрная ручка остаётся чёрной, а не синей."""
+    return BLACK_INK_RGB if mode in ("black", "any") else DEFAULT_INK_RGB
 
 
 def _rgb_to_hsv_cv(rgb: np.ndarray) -> np.ndarray:
@@ -29,12 +35,88 @@ def _rgb_to_hsv_cv(rgb: np.ndarray) -> np.ndarray:
     return np.dstack([h, s, mx * 255])
 
 
+def _paper_ref(rgb: np.ndarray) -> tuple[float, np.ndarray]:
+    """Яркость и цвет бумаги (90-й процентиль самого тёмного канала и средний цвет таких пикселей)."""
+    x = rgb.astype(np.float32)
+    mn = x.min(-1)
+    paper_v = float(np.percentile(mn, 90))
+    sel = mn >= paper_v - 10
+    if int(sel.sum()) < 20:
+        sel = mn >= float(np.percentile(mn, 75))
+    paper_c = x[sel].mean(0) if sel.any() else x.reshape(-1, 3).mean(0)
+    return paper_v, paper_c
+
+
+def _paper_level(rgb: np.ndarray) -> float:
+    return _paper_ref(rgb)[0]
+
+
+def _vs_paper(rgb: np.ndarray, paper_v: float, paper_c: np.ndarray):
+    """Насколько пиксель темнее бумаги и насколько его цвет от неё отличается (бледная ручка на
+    жёлтом фоне в min-канале почти как бумага, зато тон другой)."""
+    x = rgb.astype(np.float32)
+    mn = x.min(-1)
+    dark = np.clip((paper_v - 8.0 - mn) / 36.0, 0, 1)
+    dist = np.sqrt(((x - paper_c) ** 2).sum(-1))
+    chroma = np.clip((dist - 16.0) / 45.0, 0, 1)
+    return dark, chroma, mn, x
+
+
 def blue_ink_alpha(rgb: np.ndarray, sat_min: float = 14, hue_lo: float = 92, hue_hi: float = 145) -> np.ndarray:
-    """Маска синих/фиолетовых чернил 0..1 (как в ручной обработке job2)."""
+    """Маска синих/фиолетовых чернил 0..1 (как в ручной обработке job2).
+    Для вырезки с бледной/navy/жёлтой бумагой ink_alpha(mode='blue') берёт расширенный детектор."""
     hsv = _rgb_to_hsv_cv(rgb)
     H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
     a = np.clip((S - sat_min) / 40.0, 0, 1) * ((H >= hue_lo) & (H <= hue_hi)) * np.clip((250 - V) / 35.0, 0, 1)
     return a.astype(np.float32)
+
+
+def _blue_ink_adaptive(rgb: np.ndarray, sat_min: float = 14, hue_lo: float = 88, hue_hi: float = 152,
+                   paper_v: float | None = None, paper_c: np.ndarray | None = None) -> np.ndarray:
+    """Маска синих/голубых/фиолетовых чернил 0..1. Порог — относительно бумаги, чтобы бледная и
+    тёмно-синяя (navy) ручка не пропадали, а желтоватый фон не считался чернилами."""
+    hsv = _rgb_to_hsv_cv(rgb)
+    H, S, V = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+    if paper_v is None or paper_c is None:
+        paper_v, paper_c = _paper_ref(rgb)
+    dark, chroma, mn, x = _vs_paper(rgb, paper_v, paper_c)
+    hue = (H >= hue_lo) & (H <= hue_hi)
+    # узкий тон — как в 01ed5db / job2: печатный текст бланка не считаем синей ручкой
+    hue_classic = (H >= 92) & (H <= 145)
+    sat = np.clip((S - sat_min) / 40.0, 0, 1)
+    classic = sat * hue_classic * np.clip((250.0 - V) / 35.0, 0, 1)
+    sat_dark = np.clip((S - 6.0) / 28.0, 0, 1) * np.clip((paper_v - 24.0 - mn) / 35.0, 0, 1)
+    # фото с телефона почти обесцвечивает синюю ручку: берём отклонение «в синюю сторону» от бумаги
+    dev = paper_c - x
+    blue_dir = (dev[..., 2] < dev[..., 0] - 3) | (dev[..., 2] < dev[..., 1] - 3)
+    toward = chroma * blue_dir.astype(np.float32)
+    strength = np.maximum(np.maximum(sat, sat_dark), toward)
+    pix_blue = x[..., 2] - 0.5 * (x[..., 0] + x[..., 1])
+    paper_blue = float(paper_c[2] - 0.5 * (paper_c[0] + paper_c[1]))
+    # серая линия бланка на белой бумаге чуть «синее» фона (dblue ~4); у ручки обычно >10
+    bluer = pix_blue > paper_blue + 10
+    extra = strength * hue * np.maximum(dark, toward) * bluer.astype(np.float32)
+    # обычная шариковая уже видна как в 01ed5db / job2 — оставляем прежний детектор,
+    # без каймы и без захвата линий бланка.
+    if (classic > 0.3).sum() >= 2500 and float((classic > 0.3).mean()) >= 0.02:
+        return classic.astype(np.float32)
+    looks_blue = np.maximum(classic, extra)
+    # на СИЛЬНО цветной бумаге (жёлтый скан) синяя ручка выглядит коричневой.
+    # Включаем этот путь только если фон сам цветной (на кремовой бумаге иначе
+    # печатный чёрный текст «синее» желтоватого фона и попадает в подпись).
+    p_s = float(_rgb_to_hsv_cv(np.array([[paper_c]], np.uint8))[0, 0, 1])
+    from PIL import ImageFilter
+    printish = (mn < 55) & (S < 35)
+    near_print = np.asarray(Image.fromarray((printish.astype(np.uint8) * 255)).filter(
+        ImageFilter.MaxFilter(5))) > 0
+    tinted = (p_s > 35) * bluer.astype(np.float32) * np.maximum(dark, chroma) * (S > 20) * (~near_print)
+    a = np.maximum(looks_blue, tinted).astype(np.float32)
+    # на обычной бумаге снимаем только серые линии (синюю черту подписи не трогаем);
+    # на жёлтой линия бланка выглядит коричневой — снимаем все длинные линии.
+    a = _strip_form_lines(a, dull=None if p_s > 35 else (S < 40))
+    if p_s > 35:
+        a = _strip_printed_letters(a)
+    return a
 
 
 INK_MODES = {"blue": "синяя", "black": "чёрная", "any": "любая"}
@@ -60,63 +142,150 @@ def _remove_long_lines(mask: np.ndarray, min_len: int) -> np.ndarray:
     return out
 
 
+def _strip_form_lines(a: np.ndarray, dull: np.ndarray | None = None) -> np.ndarray:
+    """Убирает длинные горизонтальные и вертикальные линии бланка. Сначала закрываем мелкие
+    разрывы (JPEG), иначе линия распадается на короткие куски и остаётся в подписи.
+    dull — если задана, линии ищем только среди этих пикселей (серая черта бланка, а не
+    насыщенная синяя черта подписи)."""
+    from PIL import ImageFilter
+    h, w = a.shape
+    core = a > 0.3
+    closed = np.asarray(Image.fromarray((core.astype(np.uint8) * 255)).filter(ImageFilter.MaxFilter(3))) > 0
+    if dull is not None:
+        closed = closed & dull
+    lines = closed & ~_remove_long_lines(closed, max(40, int(0.35 * w)))
+    if h > 40:
+        lines |= closed & ~_remove_long_lines(closed, max(40, int(0.5 * h)))
+    lines = np.asarray(Image.fromarray((lines.astype(np.uint8) * 255)).filter(ImageFilter.MaxFilter(3))) > 0
+    return a * ~lines
+
+
 def ink_alpha(rgb: np.ndarray, mode: str = "blue", sensitivity: float = 0.5) -> np.ndarray:
-    """Маска чернил 0..1. mode: blue — синие/фиолетовые; black — тёмные серые/чёрные
-    (линии бланка убираются); any — любые не-белые. sensitivity 0..1: выше — берём бледнее."""
+    """Маска чернил 0..1. mode: blue — синие/голубые/фиолетовые; black — тёмные серые/чёрные
+    (линии бланка и печатные буквы убираются); color — цветные чернила и печати, не чёрный текст
+    и не бумага; any — тёмные или цветные, линии и печатные буквы бланка у тёмного тоже убираются.
+    sensitivity 0..1: выше — берём бледнее. Пороги — от цвета бумаги кадра, не от «почти белого»."""
     sens = float(np.clip(sensitivity, 0, 1))
+    paper_v, paper_c = _paper_ref(rgb)
+    dark, chroma, mn, _x = _vs_paper(rgb, paper_v, paper_c)
     if mode == "blue":
-        return blue_ink_alpha(rgb, sat_min=26 - 24 * sens)  # 0.5 → 14, как в job2
-    if mode == "color":   # любой цветной оттенок (синий, фиолетовый, красный штамп); чёрный текст не берём
+        return _blue_ink_adaptive(rgb, sat_min=26 - 24 * sens, paper_v=paper_v, paper_c=paper_c)
+    if mode == "color":   # цветное и не как бумага; чёрный текст (низкая S) и жёлтый фон не берём
         hsv = _rgb_to_hsv_cv(rgb)
         smin = 40 - 30 * sens
-        return (np.clip((hsv[..., 1] - smin) / 40.0, 0, 1) * np.clip((252 - hsv[..., 2]) / 30.0, 0, 1)).astype(
-            np.float32)
-    gray = rgb.astype(np.float32).mean(-1)
-    thr = 120 + 110 * sens          # порог яркости
-    a = np.clip((thr - gray) / 40.0, 0, 1)
+        sat = np.clip((hsv[..., 1] - smin) / 40.0, 0, 1)
+        ph = float(_rgb_to_hsv_cv(np.array([[paper_c]], np.uint8))[0, 0, 0])
+        hd = np.minimum(np.abs(hsv[..., 0] - ph), 180.0 - np.abs(hsv[..., 0] - ph))
+        # красная ручка на жёлтом: разница тона ~20; бумага и коричневая кайма текста — около 0
+        hue_sep = np.clip((hd - 8.0) / 14.0, 0, 1)
+        a = (sat * np.maximum(dark, chroma) * hue_sep).astype(np.float32)
+        return _strip_printed_letters(_strip_form_lines(a))
+    # чёрная / любая: темнее бумаги; плюс отличие цвета — карандаш на жёлтом фоне
+    margin = 34 - 18 * sens
+    a = np.clip((paper_v - margin - mn) / 40.0, 0, 1)
+    sat = _rgb_to_hsv_cv(rgb)[..., 1]
     if mode == "black":
-        sat = _rgb_to_hsv_cv(rgb)[..., 1]
-        a = a * (sat < 80)
-        h, w = a.shape
-        lines = (a > 0.3) & ~_remove_long_lines(a > 0.3, max(40, int(0.35 * w)))
-        if h > 40:
-            lines |= (a > 0.3) & ~_remove_long_lines((a > 0.3), max(40, int(0.5 * h)))
-        # расширяем найденные линии на 1 пиксель, чтобы не оставались «тени»
-        from PIL import ImageFilter
-        lines = np.asarray(Image.fromarray((lines * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(3))) > 0
-        a = a * ~lines
-    if mode == "any":   # тёмное ИЛИ цветное: светлые цветные оттиски печати не теряются
+        # на жёлтой бумаге чёрная ручка выглядит коричневой (S > 80)
+        p_s = float(_rgb_to_hsv_cv(np.array([[paper_c]], np.uint8))[0, 0, 1])
+        sat_max = 80.0 + 0.7 * p_s
+        a = np.maximum(a, chroma * 0.9) * (sat < sat_max)
+        a = _strip_printed_letters(_strip_form_lines(a))
+    if mode == "any":
+        a = _strip_printed_letters(_strip_form_lines(a))
         a = np.maximum(a, ink_alpha(rgb, "color", sensitivity))
     return a.astype(np.float32)
 
 
 def _components(mask: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Связные области (8-связность) небольшой маски: список (ys, xs). Обход в ширину — маска
-    здесь — только отброшенные «точки», их немного, так что без OpenCV/SciPy это быстро."""
-    ys, xs = np.nonzero(mask)
-    if not len(ys):
+    """Связные области (8-связность) маски: список (ys, xs). Без OpenCV/SciPy: сначала отрезки подряд идущих
+    пикселей по строкам, затем объединение пересекающихся отрезков соседних строк (быстро и на больших масках)."""
+    h, w = mask.shape
+    if not mask.any():
         return []
-    idx = {(int(y), int(x)): i for i, (y, x) in enumerate(zip(ys, xs))}
-    seen = np.zeros(len(ys), bool)
+    pad = np.zeros((h, w + 2), np.int8)
+    pad[:, 1:-1] = mask
+    d = np.diff(pad, axis=1)
+    runs = []                         # (строка, начало, конец)
+    row_runs = []
+    for y in range(h):
+        st, en = np.nonzero(d[y] == 1)[0], np.nonzero(d[y] == -1)[0]
+        row_runs.append(list(range(len(runs), len(runs) + len(st))))
+        runs.extend((y, int(a), int(b)) for a, b in zip(st, en))
+    parent = list(range(len(runs)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for y in range(1, h):
+        prev, cur = row_runs[y - 1], row_runs[y]
+        j = 0
+        for i in cur:
+            _, a, b = runs[i]
+            while j < len(prev) and runs[prev[j]][2] < a:     # 8-связность: касание по диагонали
+                j += 1
+            k = j
+            while k < len(prev) and runs[prev[k]][1] <= b:
+                ri, rk = find(i), find(prev[k])
+                if ri != rk:
+                    parent[ri] = rk
+                k += 1
+    groups: dict = {}
+    for i, (y, a, b) in enumerate(runs):
+        groups.setdefault(find(i), []).append((y, a, b))
     out = []
-    for i in range(len(ys)):
-        if seen[i]:
-            continue
-        seen[i] = True
-        stack, comp = [i], []
-        while stack:
-            j = stack.pop()
-            comp.append(j)
-            y, x = int(ys[j]), int(xs[j])
-            for dy in (-1, 0, 1):
-                for dx in (-1, 0, 1):
-                    k = idx.get((y + dy, x + dx))
-                    if k is not None and not seen[k]:
-                        seen[k] = True
-                        stack.append(k)
-        c = np.array(comp)
-        out.append((ys[c], xs[c]))
+    for rs in groups.values():
+        ys = np.concatenate([np.full(b - a, y) for y, a, b in rs])
+        xs = np.concatenate([np.arange(a, b) for y, a, b in rs])
+        out.append((ys, xs))
     return out
+
+
+def _strip_printed_letters(a: np.ndarray) -> np.ndarray:
+    """Убирает отдельные печатные буквы бланка (ровные, похожего роста, стоят в строку).
+    Рукописная строка обычно один-два связных штриха, её не трогаем."""
+    from PIL import ImageFilter
+    core = a > 0.45
+    comps = _components(core)
+    if len(comps) < 5:
+        return a
+    largest_h = max(int(ys.max() - ys.min() + 1) for ys, xs in comps)
+    glyphs = []
+    for ys, xs in comps:
+        h = int(ys.max() - ys.min() + 1)
+        w = int(xs.max() - xs.min() + 1)
+        n = len(ys)
+        if 6 <= h <= 52 and w <= 3.0 * h + 8 and n >= 0.25 * h * w and n <= 1800:
+            glyphs.append((float(ys.mean()), h, ys, xs))
+    if len(glyphs) < 6:
+        return a
+    glyphs.sort(key=lambda g: g[0])
+    used = [False] * len(glyphs)
+    drop = np.zeros(a.shape, bool)
+    for i, g in enumerate(glyphs):
+        if used[i]:
+            continue
+        cluster = [g]
+        used[i] = True
+        for j in range(i + 1, len(glyphs)):
+            if used[j]:
+                continue
+            if abs(glyphs[j][0] - g[0]) <= max(4.0, 0.45 * g[1]):
+                cluster.append(glyphs[j])
+                used[j] = True
+        hs = np.array([c[1] for c in cluster], float)
+        med = float(np.median(hs))
+        close = [c for c, h in zip(cluster, hs) if abs(h - med) <= 0.5 * med]
+        # одна более высокая буква не должна спасать всю печатную строку
+        # печатные буквы заметно ниже, чем основной штрих подписи; куски самой подписи не трогаем
+        if len(close) >= 6 and med <= 0.5 * largest_h - 2:
+            for _, _, ys, xs in close:
+                drop[ys, xs] = True
+    if drop.any():
+        grow = np.asarray(Image.fromarray((drop.astype(np.uint8) * 255)).filter(ImageFilter.MaxFilter(3))) > 0
+        a = a * ~grow
+    return a
 
 
 def stroke_width(core: np.ndarray) -> float:
@@ -157,7 +326,12 @@ def _remove_specks(a: np.ndarray, radius: int = 7, min_pixels: int = 30) -> np.n
     рядом с буквой (см. _beside_letters).
     Пыль посреди пустого места по-прежнему убирается."""
     from PIL import ImageFilter
-    core = a > 0.5
+    # бледная ручка: слабая альфа, порог 0.5 съедает штрих; обычная шариковая при 0.35
+    # оставляет кайму и обрывки линии бланка.
+    # бледная ручка даёт мало «уверенных» пикселей — порог 0.5 съедает штрих;
+    # обычная шариковая (тысячи пикселей >0.5) при 0.35 оставляет кайму бланка.
+    core_t = 0.5 if int((a > 0.5).sum()) >= 2000 else 0.35
+    core = a > core_t
     win = (2 * radius + 1) ** 2
     dens = Image.fromarray((core * 255).astype(np.uint8)).filter(ImageFilter.BoxBlur(radius))
     ok = np.asarray(dens, np.float32) / 255.0 * win >= min_pixels
@@ -185,10 +359,15 @@ def _remove_specks(a: np.ndarray, radius: int = 7, min_pixels: int = 30) -> np.n
     return a * keep
 
 
-def extract_ink(rgb: np.ndarray, color=DEFAULT_INK_RGB, uniform: bool = True,
-                mode: str = "blue", sensitivity: float = 0.5) -> np.ndarray:
-    """Возвращает RGBA (H,W,4) uint8: только чернила, фон прозрачный."""
+def extract_ink(rgb: np.ndarray, color=None, uniform: bool = True,
+                mode: str = "blue", sensitivity: float = 0.5, exclude: np.ndarray | None = None) -> np.ndarray:
+    """Возвращает RGBA (H,W,4) uint8: только чернила, фон прозрачный.
+    exclude — маска пикселей, которые точно не подпись (печатный текст бланка), они убираются."""
+    if color is None:
+        color = ink_color_for(mode)
     a = ink_alpha(rgb, mode, sensitivity)
+    if exclude is not None and exclude.shape == a.shape:
+        a = a * ~exclude
     a = _remove_specks(a)
     a = np.power(a, 0.7)
     v = a[a > 0.4]

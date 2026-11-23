@@ -68,3 +68,13 @@ def auto_match(receipts: list[DigitResult], acts: list[DigitResult], min_score: 
         used_r.add(r)
         used_a.add(a)
     return mapping, conf
+
+
+def duplicate_numbers(results: list[DigitResult]) -> dict[str, list[int]]:
+    """Номера, которые прочитались одинаково на нескольких страницах: {номер: [страницы]}.
+    Если в актах две страницы с одним номером, автоподбор не может знать, какая из них нужна."""
+    seen: dict[str, list[int]] = {}
+    for i, r in enumerate(results):
+        if r.text:
+            seen.setdefault(r.text, []).append(i)
+    return {t: idx for t, idx in seen.items() if len(idx) > 1}
