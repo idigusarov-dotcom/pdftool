@@ -216,7 +216,7 @@ class ImageTab(QWidget, UndoMixin):
             out = out or ask_save(self, safe_output_path(self.path, "с_картинкой"))
             if out:
                 with progress_window(self, "Ставлю картинку на страницы…") as prog:
-                    imageinsert.insert_image(self.path, self.img, self.view.get_nrect(), tp, out, progress=prog)
+                    prog.run(imageinsert.insert_image, self.path, self.img, self.view.get_nrect(), tp, out)
                 self.mark_saved()
                 self._saved = True
                 info(self, f"Готово! Картинка поставлена на {len(tp)} стр. Файл: {os.path.basename(out)}",

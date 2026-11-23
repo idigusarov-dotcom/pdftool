@@ -141,6 +141,7 @@ class MainWindow(QMainWindow):
         self.btn_more.setPopupMode(QToolButton.InstantPopup)
         self.btn_help = self._tool("circle-help", "", None)
         self.btn_help.setToolTip("Показать, куда и зачем нажимать на этом экране")
+        self.btn_help.setAccessibleName("Подсказки по этому экрану")
         self.btn_help.clicked.connect(self.start_tour)
         for b in (self.btn_undo, self.btn_redo, self.btn_theme, self.btn_more, self.btn_help):
             lay.addWidget(b)
@@ -152,6 +153,7 @@ class MainWindow(QMainWindow):
         b.setProperty("icon_name", name)
         b.setIconSize(QSize(18, 18))
         b.setToolTip(tip)
+        b.setAccessibleName(tip)           # кнопка-значок: имя для экранного диктора и UI Automation
         if slot:
             b.clicked.connect(slot)
         return b
@@ -201,6 +203,7 @@ class MainWindow(QMainWindow):
             b.setProperty("icon_on", "#ffffff")
             b.setIconSize(QSize(18, 18))
             b.setToolTip(tip)
+            b.setAccessibleName(label)     # в узком окне текста нет — имя для экранного диктора и UI Automation
             self._nav_labels[key] = label
             b.setCursor(Qt.PointingHandCursor)
             b.clicked.connect(lambda _=False, k=i: self.tabs.setCurrentIndex(k))
@@ -307,11 +310,15 @@ class MainWindow(QMainWindow):
 
     def undo(self):
         w = self.current()
+        if getattr(w, "running", False):
+            return w._busy()
         if hasattr(w, "undo_stack"):
             w.undo_stack.undo()
 
     def redo(self):
         w = self.current()
+        if getattr(w, "running", False):
+            return w._busy()
         if hasattr(w, "undo_stack"):
             w.undo_stack.redo()
 
@@ -518,6 +525,19 @@ class MainWindow(QMainWindow):
                           "Шрифт Inter (SIL OFL 1.1), иконки Lucide (ISC).")
 
     def closeEvent(self, e):
+        if self.batch.running:
+            ans = QMessageBox.question(self, "Идёт обработка пакета",
+                                       "Пакет ещё обрабатывается. Остановить и закрыть программу?\n"
+                                       "Готовые файлы останутся, недоделанный не сохранится.",
+                                       QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ans != QMessageBox.Yes:
+                e.ignore()
+                return
+            from PySide6.QtCore import QThreadPool
+            self.batch.cancel()
+            QThreadPool.globalInstance().waitForDone(60000)
+            for t in self.all_tabs():
+                t.undo_stack.setClean()
         names = {self.sign: "Подписи", self.batch: "Пакет", self.sort: "Сортировка", self.image: "Картинка",
                  self.pages: "Страницы", self.fragment: "Фрагменты", self.compress: "Сжатие"}
         dirty = [names[t] for t in self.all_tabs() if t.is_dirty()]
@@ -603,6 +623,23 @@ def _follow_system_theme(app, w):
         pass
 
 
+def fit_to_screen(w) -> str:
+    """Окно 1366×768 не помещается на ноутбуке 1366×768 (панель задач) или при масштабе 125–150%:
+    низ с кнопкой «Сохранить» уходил под панель задач, заголовок — за верх экрана. Если окно больше
+    свободной части экрана — разворачиваем его, иначе ставим по центру."""
+    scr = w.screen() or QApplication.primaryScreen()
+    if scr is None:
+        return "no-screen"
+    s = scr.availableGeometry()
+    fg = w.frameGeometry()
+    if fg.width() > s.width() or fg.height() > s.height():
+        w.showMaximized()
+        return "maximized"
+    fg.moveCenter(s.center())
+    w.move(fg.topLeft())
+    return "centered"
+
+
 def main() -> int:
     if len(sys.argv) >= 2 and sys.argv[1] == "--self-test":   # проверка сборки (CI, поддержка)
         from .selftest import run
@@ -621,6 +658,7 @@ def main() -> int:
     w = MainWindow()
     _follow_system_theme(app, w)
     w.show()
+    fit_to_screen(w)
     app.set_window(w)
     args = [a for a in sys.argv[1:] if not a.startswith("-") and os.path.isfile(a)]
     if args:       # «Открыть с помощью» на Windows передаёт файлы в командной строке

@@ -61,6 +61,8 @@ def big_button(text: str, slot=None, primary: bool = False, icon_name: str | Non
         b.setIcon(style.icon(icon_name, "#ffffff" if primary else None))
     b.setCursor(Qt.PointingHandCursor)
     b.setToolTip(tip or TIPS.get(text, text))
+    if not text and b.toolTip():
+        b.setAccessibleName(b.toolTip())   # кнопка-значок без текста
     if slot:
         b.clicked.connect(slot)
     return b
@@ -110,17 +112,61 @@ def ask_save(parent: QWidget, suggested: str, flt="PDF (*.pdf)") -> str:
     return p
 
 
+class _InputBlocker:
+    """Пока идёт долгая операция: щелчки, клавиши, перетаскивание и закрытие окна программы не
+    доходят до неё (кроме окна хода работы). Так нельзя запустить сохранение второй раз, открыть
+    другой файл посреди работы или закрыть программу, пока пишется файл."""
+
+    BLOCK = None
+
+    def __init__(self, dlg, host):
+        from PySide6.QtCore import QEvent, QObject
+
+        blocker = self
+
+        class _F(QObject):
+            def eventFilter(self, obj, ev):     # noqa: N802
+                return blocker.filter(obj, ev)
+        if _InputBlocker.BLOCK is None:
+            _InputBlocker.BLOCK = {QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick,
+                                   QEvent.KeyPress, QEvent.KeyRelease, QEvent.Wheel, QEvent.Drop,
+                                   QEvent.DragEnter, QEvent.DragMove, QEvent.Shortcut, QEvent.ShortcutOverride}
+        self.CLOSE = QEvent.Close
+        self.dlg, self.host, self.f = dlg, host, _F()
+        self.warned = False
+
+    def filter(self, obj, ev) -> bool:
+        from PySide6.QtWidgets import QWidget
+        t = ev.type()
+        if not isinstance(obj, QWidget):
+            return False
+        if t == self.CLOSE and obj is self.host:
+            ev.ignore()
+            if not self.warned:
+                self.warned = True
+                info(self.host, "Идёт сохранение. Дождитесь окончания или нажмите «Отмена» — потом окно можно закрыть.")
+            return True
+        if t in _InputBlocker.BLOCK and obj.window() is not self.dlg:
+            return True
+        return False
+
+
 class progress_window:
-    """Окно «идёт работа» с полосой и кнопкой «Отмена» для долгих сохранений в окне программы.
+    """Окно «идёт работа» с полосой и кнопкой «Отмена» для долгих сохранений.
 
         with progress_window(self, "Ставлю картинку на страницы…") as prog:
-            core_function(..., progress=prog)      # prog(i, n); при «Отмене» бросает Cancelled
+            res = prog.run(core_function, arg1, arg2)     # core_function(..., progress=cb)
 
-    Окно появляется, только если работа идёт дольше полсекунды; пока оно открыто, остальное окно
-    программы недоступно (нельзя нажать «Сохранить» второй раз), но перерисовывается — не «зависает»."""
+    Работа идёт в отдельном потоке, а окно программы всё время отвечает (Windows не пишет «Не отвечает»,
+    даже пока сохраняется большой файл). Окно хода появляется, если работа длится дольше полсекунды.
+    На это время щелчки по остальному окну и его закрытие не действуют. «Отмена» — функция получает
+    Cancelled при следующем вызове progress, файл не сохраняется.
+
+    Старый вариант prog(i, n) прямо в потоке окна тоже работает (для коротких операций и тестов)."""
 
     def __init__(self, parent: QWidget, text: str):
         self.parent, self.text, self.dlg = parent, text, None
+        self._blocker = None
 
     def __enter__(self):
         from PySide6.QtWidgets import QApplication, QProgressDialog
@@ -132,21 +178,68 @@ class progress_window:
         self.dlg.setAutoReset(False)
         self.dlg.setMinimumWidth(360)
         self.dlg.setValue(0)
+        host = self.parent.window() if self.parent is not None else None
+        self._blocker = _InputBlocker(self.dlg, host)
+        QApplication.instance().installEventFilter(self._blocker.f)
         QApplication.setOverrideCursor(Qt.WaitCursor)
         return self
+
+    def _show(self, i: int, n: int):
+        if n:
+            self.dlg.setLabelText(f"{self.text}\n{min(i, n)} из {n}")
+            self.dlg.setValue(int(100 * min(i, n) / n))
 
     def __call__(self, i: int, n: int):
         from PySide6.QtWidgets import QApplication
         from ..core.pdfutil import Cancelled
-        if n:
-            self.dlg.setLabelText(f"{self.text}\n{min(i, n)} из {n}")
-            self.dlg.setValue(int(100 * min(i, n) / n))
+        self._show(i, n)
         QApplication.processEvents()
         if self.dlg.wasCanceled():
             raise Cancelled()
 
+    def run(self, fn, *args, **kwargs):
+        """fn(*args, progress=cb, **kwargs) в отдельном потоке; ждём, не замораживая окно."""
+        import threading
+        from PySide6.QtCore import QEventLoop
+        from PySide6.QtWidgets import QApplication
+        from ..core.pdfutil import Cancelled
+        st = {"i": 0, "n": 0, "done": False, "res": None, "exc": None}
+        stop = threading.Event()
+
+        def progress(i, n):
+            st["i"], st["n"] = i, n
+            if stop.is_set():
+                raise Cancelled()
+
+        def work():
+            try:
+                st["res"] = fn(*args, progress=progress, **kwargs)
+            except BaseException as e:  # noqa: BLE001 — передаём в поток окна как есть
+                st["exc"] = e
+            finally:
+                st["done"] = True
+        th = threading.Thread(target=work, name="pdftool-save", daemon=True)
+        th.start()
+        shown = (-1, -1)
+        while not st["done"]:
+            if (st["i"], st["n"]) != shown:
+                shown = (st["i"], st["n"])
+                self._show(*shown)
+            elif self.dlg.isVisible() is False and st["n"] == 0:
+                self.dlg.setValue(0)        # даёт QProgressDialog показаться через minimumDuration
+            if self.dlg.wasCanceled():
+                stop.set()
+                self.dlg.setLabelText("Отменяю…")
+            QApplication.processEvents(QEventLoop.AllEvents, 50)
+            th.join(0.02)
+        th.join()
+        if st["exc"] is not None:
+            raise st["exc"]
+        return st["res"]
+
     def __exit__(self, *exc):
         from PySide6.QtWidgets import QApplication
+        QApplication.instance().removeEventFilter(self._blocker.f)
         QApplication.restoreOverrideCursor()
         self.dlg.close()
         self.dlg.deleteLater()
@@ -189,6 +282,8 @@ def info(parent, text, action=None):
 
 
 def error(parent, text):
+    from ..core.pdfutil import human_error
+    text = human_error(text)        # «code=2: cannot open file…» от MuPDF — на понятный язык
     h = _host(parent)
     if h is not None:
         h.toast(text, "error", timeout_ms=9000)
@@ -447,6 +542,7 @@ def zoom_bar(view: PageView):
         b.setProperty("icon_name", name)
         b.setIconSize(QSize(16, 16))
         b.setToolTip(tip)
+        b.setAccessibleName(tip)
         b.clicked.connect(fn)
         lay.addWidget(b)
     lay.addSpacing(6)

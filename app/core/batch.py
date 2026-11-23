@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence
 
@@ -9,7 +10,7 @@ from typing import Callable, Optional, Sequence
 from . import signatures as sig
 from . import templates as tp
 from .logsetup import log
-from .pdfutil import NRect, PdfError, open_pdf
+from .pdfutil import NRect, PdfError, open_pdf, windows_name_problem
 
 
 class Cancelled(Exception):
@@ -46,6 +47,11 @@ def check_items(items: Sequence[BatchItem]) -> list[str]:
         if not (it.out_path or "").strip():
             errs.append(f"Пара {k}: не указано имя результата")
             continue
+        if sys.platform == "win32":
+            bad = windows_name_problem(os.path.basename(it.out_path))
+            if bad:
+                errs.append(f"Пара {k}: {bad}")
+                continue
         if not os.path.isdir(os.path.dirname(os.path.abspath(it.out_path))):
             errs.append(f"Пара {k}: нет папки для результата ({it.out_path})")
         o = _norm(it.out_path)
