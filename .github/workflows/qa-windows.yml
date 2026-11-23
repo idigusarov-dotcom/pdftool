@@ -1,0 +1,137 @@
+name: qa-windows
+
+# Ручная проверка выпущенного PdfTool.exe на Windows. Запускается только для веток qa/** и вручную;
+# main и релизы не трогает.
+on:
+  push:
+    branches: ["qa/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 170
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -c constraints.txt
+          pip install pywinauto psutil pywin32
+      - name: Windows version
+        shell: pwsh
+        run: |
+          Get-ComputerInfo -Property OsName,OsVersion,OsBuildNumber,OsLanguage,CsProcessors | Format-List
+          Get-CimInstance Win32_VideoController | Select-Object Name,CurrentHorizontalResolution,CurrentVerticalResolution | Format-List
+          whoami /groups | Select-String "Administrators|Администраторы"
+      - name: Download released PdfTool.exe v1.4.2
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.4.2 -R $env:GITHUB_REPOSITORY -p PdfTool.exe -D rel
+          $h = (Get-FileHash rel\PdfTool.exe -Algorithm SHA256).Hash
+          Write-Host "sha256 $h"
+          if ($h -ne "357D78C6BF40CEAE16FBAA2AFA0853FD8F6194437B593F71DA12921BA9594000") { throw "это не релизный exe" }
+          Get-AuthenticodeSignature rel\PdfTool.exe | Format-List Status,StatusMessage
+      - name: Prepare small disk, network share, test data
+        shell: pwsh
+        run: |
+          $vhd = "$env:RUNNER_TEMP\small.vhd"
+          "create vdisk file=$vhd maximum=8 type=fixed`nselect vdisk file=$vhd`nattach vdisk`ncreate partition primary`nformat fs=ntfs quick label=SMALL`nassign letter=Q" | Out-File -Encoding ascii dp.txt
+          diskpart /s dp.txt
+          Get-PSDrive Q -ErrorAction SilentlyContinue | Format-List
+          New-Item -ItemType Directory -Force C:\qa_share | Out-Null
+          New-SmbShare -Name qa -Path C:\qa_share -FullAccess Everyone -ErrorAction Continue
+          "QA_SMALL_DRIVE=Q:\" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "QA_UNC=\\localhost\qa" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          python qa/make_data.py "$env:RUNNER_TEMP\QA данные"
+      - name: Unit tests on this Windows
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q -rs tests
+        continue-on-error: true
+      - name: Scenarios in the app window (fix/qa-1.4.2 code)
+        shell: pwsh
+        timeout-minutes: 45
+        run: |
+          $start = Get-Date
+          $start.ToString("o") | Out-File start.txt
+          python qa/scenarios.py "$env:RUNNER_TEMP\QA данные" qa_out
+          Write-Host "exit code: $LASTEXITCODE"
+        continue-on-error: true
+      - name: End-to-end suite on synthetic scans (all screens, output content checked)
+        timeout-minutes: 45
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PDFTOOL_E2E_SHOTS: qa_e2e_shots
+        run: python -m pytest -q -rs tests/test_e2e_sign.py tests/test_e2e_batch_fragment.py tests/test_e2e_other.py tests/test_qa142.py
+        continue-on-error: true
+      - name: Screens at 150% scale
+        shell: pwsh
+        timeout-minutes: 5
+        env:
+          QT_SCALE_FACTOR: "1.5"
+          QA_TAG: "150"
+        run: python qa/scenarios.py "$env:RUNNER_TEMP\QA данные" qa_out_150 --shots-only
+        continue-on-error: true
+      - name: Released exe through Windows UI Automation
+        shell: pwsh
+        timeout-minutes: 30
+        run: python qa/exe_gui.py rel\PdfTool.exe "$env:RUNNER_TEMP\QA данные" qa_exe
+        continue-on-error: true
+      - name: Released exe at Windows level (long path, UNC, non-admin, downloaded mark)
+        shell: pwsh
+        timeout-minutes: 20
+        run: python qa/win_system.py rel\PdfTool.exe qa_sys
+        continue-on-error: true
+      - name: Defender scan of exe
+        shell: pwsh
+        run: |
+          $mp = "$env:ProgramFiles\Windows Defender\MpCmdRun.exe"
+          if (Test-Path $mp) { & $mp -Scan -ScanType 3 -File "$PWD\rel\PdfTool.exe" -DisableRemediation | Tee-Object qa_sys_defender.txt } else { "Defender CLI нет" | Tee-Object qa_sys_defender.txt }
+          Get-MpComputerStatus -ErrorAction SilentlyContinue | Select-Object AMServiceEnabled,RealTimeProtectionEnabled,AntivirusSignatureVersion | Format-List | Tee-Object -Append qa_sys_defender.txt
+        continue-on-error: true
+      - name: Windows event log (crashes)
+        if: always()
+        shell: pwsh
+        run: |
+          $start = if (Test-Path start.txt) { [datetime](Get-Content start.txt) } else { (Get-Date).AddHours(-2) }
+          New-Item -ItemType Directory -Force qa_events | Out-Null
+          Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=$start} -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -in @('Application Error','Windows Error Reporting','Application Hang') } |
+            Select-Object TimeCreated,ProviderName,Id,Message | Format-List | Out-File qa_events\app_errors.txt -Encoding utf8
+          Get-Content qa_events\app_errors.txt
+          Copy-Item "$env:APPDATA\PdfTool\log.txt" qa_events\ -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-${{ matrix.os }}
+          path: |
+            qa_out/report.json
+            qa_out/faulthandler.txt
+            qa_out/current.txt
+            qa_out/app_log.txt
+            qa_out/shots/
+            qa_out_150/shots/
+            qa_e2e_shots/
+            qa_exe/*.json
+            qa_exe/*.txt
+            qa_exe/exe_shots/
+            qa_sys/
+            qa_sys_defender.txt
+            qa_events/
+          if-no-files-found: ignore
