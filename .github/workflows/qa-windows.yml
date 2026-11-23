@@ -73,11 +73,11 @@ jobs:
           python qa/scenarios.py "$env:RUNNER_TEMP\QA данные" qa_out
           Write-Host "exit code: $LASTEXITCODE"
         continue-on-error: true
-      - name: Same scenarios on the fix branch (fix/windows-qa)
+      - name: Same scenarios on the fix branch (fix/demo-1.4.2)
         shell: pwsh
         timeout-minutes: 45
         run: |
-          git fetch --depth 1 origin fix/windows-qa
+          git fetch --depth 1 origin fix/demo-1.4.2
           git worktree add fixed FETCH_HEAD
           $env:QA_APP_ROOT = "$PWD\fixed"
           $env:QA_TAG = "fixed"
