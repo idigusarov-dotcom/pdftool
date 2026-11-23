@@ -7,6 +7,12 @@ import numpy as np
 from PIL import Image
 
 DEFAULT_INK_RGB = (28, 48, 160)  # единый цвет "шариковой ручки"
+BLACK_INK_RGB = (32, 32, 36)     # единый цвет для чёрной ручки / карандаша
+
+
+def ink_color_for(mode: str):
+    """Единый цвет чернил («настоящий цвет» выключен): чёрная ручка остаётся чёрной, а не синей."""
+    return BLACK_INK_RGB if mode in ("black", "any") else DEFAULT_INK_RGB
 
 
 def _rgb_to_hsv_cv(rgb: np.ndarray) -> np.ndarray:
@@ -91,31 +97,48 @@ def ink_alpha(rgb: np.ndarray, mode: str = "blue", sensitivity: float = 0.5) -> 
 
 
 def _components(mask: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Связные области (8-связность) небольшой маски: список (ys, xs). Обход в ширину — маска
-    здесь — только отброшенные «точки», их немного, так что без OpenCV/SciPy это быстро."""
-    ys, xs = np.nonzero(mask)
-    if not len(ys):
+    """Связные области (8-связность) маски: список (ys, xs). Без OpenCV/SciPy: сначала отрезки подряд идущих
+    пикселей по строкам, затем объединение пересекающихся отрезков соседних строк (быстро и на больших масках)."""
+    h, w = mask.shape
+    if not mask.any():
         return []
-    idx = {(int(y), int(x)): i for i, (y, x) in enumerate(zip(ys, xs))}
-    seen = np.zeros(len(ys), bool)
+    pad = np.zeros((h, w + 2), np.int8)
+    pad[:, 1:-1] = mask
+    d = np.diff(pad, axis=1)
+    runs = []                         # (строка, начало, конец)
+    row_runs = []
+    for y in range(h):
+        st, en = np.nonzero(d[y] == 1)[0], np.nonzero(d[y] == -1)[0]
+        row_runs.append(list(range(len(runs), len(runs) + len(st))))
+        runs.extend((y, int(a), int(b)) for a, b in zip(st, en))
+    parent = list(range(len(runs)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for y in range(1, h):
+        prev, cur = row_runs[y - 1], row_runs[y]
+        j = 0
+        for i in cur:
+            _, a, b = runs[i]
+            while j < len(prev) and runs[prev[j]][2] < a:     # 8-связность: касание по диагонали
+                j += 1
+            k = j
+            while k < len(prev) and runs[prev[k]][1] <= b:
+                ri, rk = find(i), find(prev[k])
+                if ri != rk:
+                    parent[ri] = rk
+                k += 1
+    groups: dict = {}
+    for i, (y, a, b) in enumerate(runs):
+        groups.setdefault(find(i), []).append((y, a, b))
     out = []
-    for i in range(len(ys)):
-        if seen[i]:
-            continue
-        seen[i] = True
-        stack, comp = [i], []
-        while stack:
-            j = stack.pop()
-            comp.append(j)
-            y, x = int(ys[j]), int(xs[j])
-            for dy in (-1, 0, 1):
-                for dx in (-1, 0, 1):
-                    k = idx.get((y + dy, x + dx))
-                    if k is not None and not seen[k]:
-                        seen[k] = True
-                        stack.append(k)
-        c = np.array(comp)
-        out.append((ys[c], xs[c]))
+    for rs in groups.values():
+        ys = np.concatenate([np.full(b - a, y) for y, a, b in rs])
+        xs = np.concatenate([np.arange(a, b) for y, a, b in rs])
+        out.append((ys, xs))
     return out
 
 
@@ -185,10 +208,15 @@ def _remove_specks(a: np.ndarray, radius: int = 7, min_pixels: int = 30) -> np.n
     return a * keep
 
 
-def extract_ink(rgb: np.ndarray, color=DEFAULT_INK_RGB, uniform: bool = True,
-                mode: str = "blue", sensitivity: float = 0.5) -> np.ndarray:
-    """Возвращает RGBA (H,W,4) uint8: только чернила, фон прозрачный."""
+def extract_ink(rgb: np.ndarray, color=None, uniform: bool = True,
+                mode: str = "blue", sensitivity: float = 0.5, exclude: np.ndarray | None = None) -> np.ndarray:
+    """Возвращает RGBA (H,W,4) uint8: только чернила, фон прозрачный.
+    exclude — маска пикселей, которые точно не подпись (печатный текст бланка), они убираются."""
+    if color is None:
+        color = ink_color_for(mode)
     a = ink_alpha(rgb, mode, sensitivity)
+    if exclude is not None and exclude.shape == a.shape:
+        a = a * ~exclude
     a = _remove_specks(a)
     a = np.power(a, 0.7)
     v = a[a > 0.4]

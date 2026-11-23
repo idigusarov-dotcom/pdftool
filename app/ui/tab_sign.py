@@ -344,15 +344,27 @@ class SignTab(QWidget, UndoMixin):
                 self.table.cellWidget(r, C_ACT).setCurrentIndex(0 if m is None else m + 1)
             self._loading = False
             self.conf = [c if m is not None else 0.0 for m, c in zip(mapping, conf)]
+            dups = numbers.duplicate_numbers(self.nums_act)
+            dup_acts = {a: t for t, idx in dups.items() for a in idx}
+            for r, m in enumerate(mapping):
+                if m in dup_acts:                    # таких актов несколько — пара под вопросом
+                    self.conf[r] = min(self.conf[r], 0.3)
             if temps:   # рамки подписи — из шаблона, узнанного на каждой странице
                 tp.apply_detected_frames(self.job, temps)
             self.refresh_marks()
             self.show_row(self.table.currentRow())
             self.commit("автосопоставление")
-            low = sum(1 for r, c in enumerate(self.conf) if c < 0.5)
-            info(self, f"Готово. Сопоставлено: {sum(m is not None for m in mapping)} из {len(mapping)}.\n"
-                       f"Строк для проверки (жёлтые): {low}.\nРаспознавание рукописных цифр неточное — "
-                       f"проверьте каждую строку по миниатюрам.")
+            low = sum(1 for m, c in zip(mapping, self.conf) if m is not None and c < 0.5)
+            none = sum(1 for m in mapping if m is None)
+            msg = f"Готово. Сопоставлено: {sum(m is not None for m in mapping)} из {len(mapping)}.\n" \
+                  f"Строк для проверки (жёлтые): {low}."
+            if none:
+                msg += f"\nБез пары (серые): {none} — акт не найден, выберите вручную или оставьте «не ставить»."
+            if dups:
+                msg += "\nВ актах повторяются номера: " + "; ".join(
+                    f"{t} (стр. {', '.join(str(i + 1) for i in idx)})" for t, idx in dups.items()) + \
+                    " — проверьте, какой акт нужен."
+            info(self, msg + "\nРаспознавание рукописных цифр неточное — проверьте каждую строку по миниатюрам.")
 
         def fail(msg):
             dlg.close()
@@ -554,7 +566,7 @@ class SignTab(QWidget, UndoMixin):
             self.lbl_ink.clear()
             return
         src = self.job.src_overrides.get(a, self.job.src_rect)
-        rgba = sig.cut_signature(self.acts, a, src, 110, True, self.job.ink_mode, self.job.sensitivity)
+        rgba = sig.preview_cut(self.job, self.acts, a, src, 110)
         if rgba.size == 0:
             return
         # показываем на белом фоне

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image, ImageDraw
 
-from .ink import DEFAULT_INK_RGB, unblend_white
+from .ink import ink_color_for, unblend_white
 
 ERASE, RESTORE = "erase", "restore"
 _CODE = {ERASE: 1, RESTORE: 2}
@@ -105,7 +105,7 @@ def restore_layer(crop_rgb: np.ndarray, mode: str, keep_colors: bool) -> np.ndar
     if keep_colors:
         col = unblend_white(crop_rgb, a, paper=color)
     else:
-        col = np.broadcast_to(np.array(DEFAULT_INK_RGB, np.uint8), a.shape + (3,))
+        col = np.broadcast_to(np.array(ink_color_for(mode), np.uint8), a.shape + (3,))
     return np.dstack([col, (a * 255).astype(np.uint8)]).astype(np.uint8)
 
 

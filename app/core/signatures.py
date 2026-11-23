@@ -30,6 +30,8 @@ class TransferJob:
     trim_left: bool = True   # прижать подпись к левому краю целевой области
     ink_mode: str = "blue"   # blue / black / any
     sensitivity: float = 0.5
+    remove_form: bool = True  # чёрная ручка: убирать печатный текст бланка (общий у всех актов)
+    _form: dict = field(default_factory=dict, repr=False, compare=False)
 
 
 def trim_x(rgba: np.ndarray, pad: int = 4) -> tuple[np.ndarray, float, float]:
@@ -56,17 +58,69 @@ def guess_mapping(n_receipts: int, n_acts: int) -> list[Optional[int]]:
     return [i if i < n_acts else None for i in range(n_receipts)]
 
 
-def cut_signature(acts: pymupdf.Document, act_index: int, rect: NRect, dpi: int = 200,
-                  uniform_color: bool = True, mode: str = "blue", sensitivity: float = 0.5) -> np.ndarray:
+def _crop(acts: pymupdf.Document, act_index: int, rect: NRect, dpi: int) -> np.ndarray:
     img = render_page(acts, act_index, dpi)
     h, w = img.shape[:2]
     x0, y0, x1, y1 = rect.to_pixels(w, h)
-    return extract_ink(img[y0:y1, x0:x1], uniform=uniform_color, mode=mode, sensitivity=sensitivity)
+    return img[y0:y1, x0:x1]
+
+
+def cut_signature(acts: pymupdf.Document, act_index: int, rect: NRect, dpi: int = 200,
+                  uniform_color: bool = True, mode: str = "blue", sensitivity: float = 0.5,
+                  exclude: np.ndarray | None = None) -> np.ndarray:
+    return extract_ink(_crop(acts, act_index, rect, dpi), uniform=uniform_color, mode=mode,
+                       sensitivity=sensitivity, exclude=exclude)
+
+
+FORM_PAD = 0.03   # бланк ищем в рамке с запасом: печать, обрезанная краем рамки, иначе не совмещается
+
+
+def _padded(acts: pymupdf.Document, a: int, rect: NRect, dpi: int):
+    """(кусок с запасом, срез рамки внутри него, сама рамка)."""
+    img = render_page(acts, a, dpi)
+    h, w = img.shape[:2]
+    x0, y0, x1, y1 = rect.to_pixels(w, h)
+    p = NRect(max(0.0, rect.x0 - FORM_PAD), max(0.0, rect.y0 - FORM_PAD),
+              min(1.0, rect.x1 + FORM_PAD), min(1.0, rect.y1 + FORM_PAD))
+    px0, py0, px1, py1 = p.to_pixels(w, h)
+    px0, py0, px1, py1 = min(px0, x0), min(py0, y0), max(px1, x1), max(py1, y1)
+    return img[py0:py1, px0:px1], (slice(y0 - py0, y1 - py0), slice(x0 - px0, x1 - px0)), img[y0:y1, x0:x1]
+
+
+def _form_ref(job: "TransferJob", acts: pymupdf.Document):
+    """Бланк по актам задачи (до 12 страниц с общей рамкой); считается один раз на задачу."""
+    from . import formmask
+    key = (job.src_rect, job.dpi, len(acts))
+    if job._form.get("key") != key:
+        pages = sorted({m for m in job.mapping if m is not None and 0 <= m < len(acts)
+                        and m not in job.src_overrides}) or list(range(len(acts)))
+        if len(pages) > formmask.MAX_PAGES:
+            pages = [pages[int(i)] for i in np.linspace(0, len(pages) - 1, formmask.MAX_PAGES)]
+        job._form = {"key": key,
+                     "ref": formmask.FormRef([_padded(acts, p, job.src_rect, job.dpi)[0] for p in pages])}
+    return job._form["ref"]
+
+
+def _cut_dpi(job: "TransferJob", acts: pymupdf.Document, a: int, src: NRect, dpi: int) -> np.ndarray:
+    exclude = None
+    if job.remove_form and job.ink_mode in ("black", "any") and src == job.src_rect and len(acts) >= 3:
+        ref = _form_ref(job, acts)
+        if ref.ok:
+            big, inner, crop = _padded(acts, a, src, dpi)
+            m = ref.mask(big)
+            exclude = None if m is None else m[inner]
+    if exclude is None:
+        crop = _crop(acts, a, src, dpi)
+    return extract_ink(crop, uniform=job.uniform_color, mode=job.ink_mode, sensitivity=job.sensitivity,
+                       exclude=exclude)
+
+
+def preview_cut(job: "TransferJob", acts: pymupdf.Document, a: int, src: NRect, dpi: int = 110) -> np.ndarray:
+    return _cut_dpi(job, acts, a, src, dpi)
 
 
 def _cut(job: "TransferJob", acts: pymupdf.Document, a: int, src: NRect) -> np.ndarray:
-    return cut_signature(acts, a, src, job.dpi, job.uniform_color, job.ink_mode, job.sensitivity)
-
+    return _cut_dpi(job, acts, a, src, job.dpi)
 
 def fit_rect(src_w: float, src_h: float, target: pymupdf.Rect) -> pymupdf.Rect:
     """Вписывает картинку с сохранением пропорций: по левому краю, по центру по вертикали."""
