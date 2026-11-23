@@ -7,24 +7,39 @@ from typing import Optional
 import numpy as np
 import pymupdf
 
+from . import retouch as rt
 from .ink import extract_ink, to_png_bytes
 from .pdfutil import NRect, insert_png, render_page, save_doc, open_pdf
 
 CUT_DPI = 300
 
 
-def cut(doc: pymupdf.Document, page: int, rect: NRect, mode: str = "blue", sensitivity: float = 0.5,
-        keep_colors: bool = True, dpi: int = CUT_DPI) -> np.ndarray:
-    """RGBA фрагмента. mode: blue/black/color/any — фон убирается; none — вырезается как есть (непрозрачно)."""
+def cut_parts(doc: pymupdf.Document, page: int, rect: NRect, mode: str = "blue", sensitivity: float = 0.5,
+              keep_colors: bool = True, dpi: int = CUT_DPI):
+    """Всё, что нужно для вырезания и ручной доработки: (автоматический RGBA, исходный кусок RGB,
+    рамка в пикселях страницы, размер страницы в пикселях)."""
     img = render_page(doc, page, dpi)
     h, w = img.shape[:2]
-    x0, y0, x1, y1 = rect.to_pixels(w, h)
+    box = rect.to_pixels(w, h)
+    x0, y0, x1, y1 = box
     crop = img[y0:y1, x0:x1]
     if crop.size == 0:
-        return np.zeros((1, 1, 4), np.uint8)
+        return np.zeros((1, 1, 4), np.uint8), np.full((1, 1, 3), 255, np.uint8), box, (w, h)
     if mode == "none":
-        return np.dstack([crop, np.full(crop.shape[:2], 255, np.uint8)])
-    return extract_ink(crop, uniform=not keep_colors, mode=mode, sensitivity=sensitivity)
+        auto = np.dstack([crop, np.full(crop.shape[:2], 255, np.uint8)])
+    else:
+        auto = extract_ink(crop, uniform=not keep_colors, mode=mode, sensitivity=sensitivity)
+    return auto, crop, box, (w, h)
+
+
+def cut(doc: pymupdf.Document, page: int, rect: NRect, mode: str = "blue", sensitivity: float = 0.5,
+        keep_colors: bool = True, dpi: int = CUT_DPI, retouch=()) -> np.ndarray:
+    """RGBA фрагмента. mode: blue/black/color/any — фон убирается; none — вырезается как есть (непрозрачно).
+    retouch — ручные правки (мазки «Ластик» / «Вернуть чернила»), накладываются поверх автоматики."""
+    auto, crop, box, page_px = cut_parts(doc, page, rect, mode, sensitivity, keep_colors, dpi)
+    if not retouch:
+        return auto
+    return rt.apply(auto, crop, retouch, box, page_px, mode, keep_colors)
 
 
 def trim(rgba: np.ndarray, pad: int = 6) -> tuple[np.ndarray, tuple[float, float, float, float]]:
@@ -51,12 +66,14 @@ class Placement:
     sensitivity: float = 0.5
     keep_colors: bool = True
     opacity: float = 1.0
+    retouch: tuple = ()                       # ручные правки (tuple[retouch.Stroke, ...])
     _png: Optional[bytes] = field(default=None, repr=False, compare=False)
 
     def png(self) -> bytes:
         if self._png is None:
             with open_pdf(self.src_path) as d:
-                rgba, _ = trim(cut(d, self.src_page, self.src_rect, self.mode, self.sensitivity, self.keep_colors))
+                rgba, _ = trim(cut(d, self.src_page, self.src_rect, self.mode, self.sensitivity, self.keep_colors,
+                                     retouch=self.retouch))
             if self.opacity < 1:
                 rgba = rgba.copy()
                 rgba[..., 3] = (rgba[..., 3] * self.opacity).astype(np.uint8)

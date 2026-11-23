@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QListWidget,
                                QSlider, QSpinBox, QSplitter, QVBoxLayout, QWidget)
@@ -23,6 +23,13 @@ PREVIEW_DPI = 150
 VIEW_DPI = 90
 
 
+class _PreviewLabel(QLabel):
+    doubleClicked = Signal()
+
+    def mouseDoubleClickEvent(self, e):
+        self.doubleClicked.emit()
+
+
 class FragmentTab(QWidget, UndoMixin):
     def __init__(self):
         super().__init__()
@@ -32,6 +39,8 @@ class FragmentTab(QWidget, UndoMixin):
         self.placed: list[fr.Placement] = []
         self.cur_rgba: np.ndarray | None = None
         self.cur_frac = (0.0, 0.0, 1.0, 1.0)
+        self.cur_retouch: tuple = ()      # ручные правки текущего фрагмента (мазки ластика / кисти)
+        self._retouch_page = None         # страница-источник, к которой относятся правки
         self._loading = False
         self._saved = False
         s = settings()
@@ -105,12 +114,22 @@ class FragmentTab(QWidget, UndoMixin):
         self.chk_keep.toggled.connect(self.settings_changed)
         mv.addWidget(self.chk_keep)
         mv.addWidget(QLabel("Так вырезалось:"))
-        self.lbl_prev = QLabel()
+        self.lbl_prev = _PreviewLabel()
+        self.lbl_prev.doubleClicked.connect(self.open_retouch)
         self.lbl_prev.setObjectName("InkPreview")
         self.lbl_prev.setMinimumSize(200, 90)
         self.lbl_prev.setAlignment(Qt.AlignCenter)
-        self.lbl_prev.setToolTip("Вырезанный фрагмент на клетчатом фоне: клетки — это прозрачность")
+        self.lbl_prev.setToolTip("Вырезанный фрагмент на клетчатом фоне: клетки — это прозрачность.\n"
+                                 "Двойной щелчок — доработать вручную (ластик, вернуть чернила)")
         mv.addWidget(self.lbl_prev)
+        self.btn_retouch = big_button("Доработать вручную…", self.open_retouch, icon_name="eraser",
+                                      tip="Стереть лишнее или вернуть пропавшие штрихи в большом окне")
+        self.btn_retouch.setEnabled(False)
+        mv.addWidget(self.btn_retouch)
+        self.lbl_retouch = QLabel()
+        self.lbl_retouch.setObjectName("Muted")
+        self.lbl_retouch.setVisible(False)
+        mv.addWidget(self.lbl_retouch)
         self.btn_place = big_button("Поставить и взять ещё", self.place_current, icon_name="plus",
                                     tip="Закрепить этот фрагмент на месте и вырезать следующий")
         mv.addWidget(self.btn_place)
@@ -164,16 +183,19 @@ class FragmentTab(QWidget, UndoMixin):
 
     # ---------- состояние ----------
     def _pl_tuple(self, p: fr.Placement):
-        return (p.src_path, p.src_page, p.src_rect, p.dst_page, p.dst_rect, p.mode, p.sensitivity, p.keep_colors)
+        return (p.src_path, p.src_page, p.src_rect, p.dst_page, p.dst_rect, p.mode, p.sensitivity, p.keep_colors,
+                p.retouch)
 
     def get_state(self):
         return dict(placed=[self._pl_tuple(p) for p in self.placed], src=self.view_src.get_nrect(),
                     dst=self.view_dst.get_nrect(), mode=self.cb_mode.currentData(), sens=self.sl_sens.value(),
-                    keep=self.chk_keep.isChecked())
+                    keep=self.chk_keep.isChecked(), retouch=self.cur_retouch, retouch_page=self._retouch_page)
 
     def set_state(self, st):
         self._loading = True
-        self.placed = [fr.Placement(*t) for t in st["placed"]]
+        self.placed = [fr.Placement(*t[:8], retouch=t[8] if len(t) > 8 else ()) for t in st["placed"]]
+        self.cur_retouch = st.get("retouch", ())
+        self._retouch_page = st.get("retouch_page")
         self.cb_mode.setCurrentIndex(max(0, self.cb_mode.findData(st["mode"])))
         self.sl_sens.setValue(st["sens"])
         self.chk_keep.setChecked(st["keep"])
@@ -188,6 +210,7 @@ class FragmentTab(QWidget, UndoMixin):
             self.view_dst.remove_box("main")
             self.cur_rgba = None
             self.lbl_prev.clear()
+        self._retouch_ui()
 
     def step_index(self) -> int:
         if not (self.src and self.dst):
@@ -215,6 +238,7 @@ class FragmentTab(QWidget, UndoMixin):
         self.dz_src.set_loaded(f"{os.path.basename(path)} · {len(self.src)} стр.")
         self.sp_src.setMaximum(len(self.src))
         self.view_src.clear_boxes()
+        self._drop_retouch("открыт другой файл")
         self.show_src()
 
     def open_dst(self, path: str = ""):
@@ -238,6 +262,8 @@ class FragmentTab(QWidget, UndoMixin):
 
     def show_src(self, *_):
         if self.src is not None:
+            if self._retouch_page is not None and self._retouch_page != self.sp_src.value() - 1:
+                self._drop_retouch("другая страница")
             self.view_src.set_page(page_pixmap(self.src, self.sp_src.value() - 1, VIEW_DPI))
             if self.view_src.get_nrect() is not None:
                 self._timer.start()
@@ -278,9 +304,11 @@ class FragmentTab(QWidget, UndoMixin):
         if self.src is None or nr is None:
             return
         mode, sens, keep = self._params()
-        rgba = fr.cut(self.src, self.sp_src.value() - 1, nr, mode, sens, keep, dpi=PREVIEW_DPI)
+        rgba = fr.cut(self.src, self.sp_src.value() - 1, nr, mode, sens, keep, dpi=PREVIEW_DPI,
+                      retouch=self.cur_retouch)
         self.cur_rgba, self.cur_frac = fr.trim(rgba)
         self._show_preview()
+        self._retouch_ui()
         if self.dst is None:
             return
         old = keep_dst or self.view_dst.get_nrect()
@@ -307,6 +335,39 @@ class FragmentTab(QWidget, UndoMixin):
         pm = np_to_pixmap(img)
         self.lbl_prev.setPixmap(pm.scaled(self.lbl_prev.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
+    # ---------- ручная доработка ----------
+    def _retouch_ui(self):
+        self.btn_retouch.setEnabled(self.cur_rgba is not None)
+        n = len(self.cur_retouch)
+        self.lbl_retouch.setText(f"Ручных правок: {n}" if n else "")
+        self.lbl_retouch.setToolTip("Правки сохраняются при смене чувствительности, режима и рамки; "
+                                    "сбрасываются при смене страницы или файла «Откуда»")
+        self.lbl_retouch.setVisible(bool(n))
+
+    def _drop_retouch(self, why: str):
+        if self.cur_retouch:
+            self.cur_retouch, self._retouch_page = (), None
+            self._retouch_ui()
+            info(self, f"Ручные правки фрагмента сброшены: {why}.")
+        self._retouch_page = None
+
+    def open_retouch(self):
+        nr = self.view_src.get_nrect()
+        if self.src is None or nr is None or self.cur_rgba is None:
+            return error(self, "Сначала обведите фрагмент на странице «Откуда».")
+        from .retouch_dialog import RetouchDialog
+        mode, sens, keep = self._params()
+        dlg = RetouchDialog(self, self.src, self.sp_src.value() - 1, nr, mode, sens, keep, self.cur_retouch)
+        self._retouch_dlg = dlg           # для проверок и снимков экрана
+        if dlg.exec() != RetouchDialog.Accepted:
+            return
+        new = dlg.strokes()
+        if new == self.cur_retouch:
+            return
+        self.cur_retouch = new
+        self._retouch_page = self.sp_src.value() - 1 if new else None
+        self.recut()       # пересчёт предпросмотра и фрагмента на странице «Куда» + шаг отмены
+
     def natural_size(self):
         nr = self.view_src.get_nrect()
         cur = self.view_dst.get_nrect()
@@ -327,7 +388,8 @@ class FragmentTab(QWidget, UndoMixin):
         if self.src is None or self.dst is None or s is None or d is None or self.cur_rgba is None:
             return None
         mode, sens, keep = self._params()
-        return fr.Placement(self.src_path, self.sp_src.value() - 1, s, self.sp_dst.value() - 1, d, mode, sens, keep)
+        return fr.Placement(self.src_path, self.sp_src.value() - 1, s, self.sp_dst.value() - 1, d, mode, sens, keep,
+                            retouch=self.cur_retouch)
 
     def place_current(self):
         pl = self.current_placement()
@@ -337,7 +399,9 @@ class FragmentTab(QWidget, UndoMixin):
         self.view_src.remove_box("main")
         self.view_dst.remove_box("main")
         self.cur_rgba = None
+        self.cur_retouch, self._retouch_page = (), None
         self.lbl_prev.clear()
+        self._retouch_ui()
         self.refresh_list()
         self.show_dst()
         self.commit("фрагмент поставлен")
@@ -355,7 +419,7 @@ class FragmentTab(QWidget, UndoMixin):
         self.lst.clear()
         for p in self.placed:
             self.lst.addItem(f"{os.path.basename(p.src_path)} стр.{p.src_page + 1} → стр.{p.dst_page + 1} "
-                             f"({FRAGMENT_MODES.get(p.mode, p.mode)})")
+                             f"({FRAGMENT_MODES.get(p.mode, p.mode)})" + (" · вручную" if p.retouch else ""))
 
     # ---------- сохранение ----------
     def all_placements(self) -> list[fr.Placement]:
@@ -397,6 +461,10 @@ class FragmentTab(QWidget, UndoMixin):
                  "станет цвета синей ручки."),
             Step(self.lbl_prev, "Проверьте", "Здесь видно, что вырезалось. Клетки — прозрачный фон. Если "
                  "попало лишнее — уменьшите рамку или чувствительность."),
+            Step(self.btn_retouch, "Доработать вручную", "Если осталась лишняя точка или линия бланка — "
+                 "<b>Ластик</b>. Если пропал кусок подписи — <b>Вернуть чернила</b>: кисть берёт штрихи из "
+                 "исходного скана. Размер кисти — клавиши [ и ], отмена — Ctrl + Z. Правки сохраняются, даже "
+                 "если потом поменять чувствительность. Можно и двойным щелчком по картинке."),
             Step(self.card_dst, "Поставьте на место", "Фрагмент появился на странице «Куда». Перетащите его "
                  "мышью или просто щёлкните нужное место. Размер — за синий уголок, «1:1» — исходный размер."),
             Step(self.btn_place, "Ещё фрагмент", "Нужно несколько (подпись и печать)? Нажмите — текущий "

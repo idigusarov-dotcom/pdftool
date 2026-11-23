@@ -65,7 +65,7 @@ def run(out_dir: str) -> int:
             assert fam == QFontDatabase.systemFont(QFontDatabase.GeneralFont).family(), fam
         elif sys.platform.startswith("win"):
             assert fam.startswith("Segoe UI") or fam == "Inter", fam
-        icons = [n for n in ("pen-tool", "layers", "scissors", "image", "files", "save", "circle-help",
+        icons = [n for n in ("pen-tool", "eraser", "brush", "layers", "scissors", "image", "files", "save", "circle-help",
                              "chevron-up", "chevron-down")
                  if style.icon(n).isNull()]
         assert not icons, f"не загрузились иконки: {icons}"
@@ -109,6 +109,11 @@ def run(out_dir: str) -> int:
         imageinsert.insert_image(acts, img, NRect(.3, .3, .5, .5), [0, 2], os.path.join(work, "с картинкой.pdf"))
         pl = fragment.Placement(acts, 0, NRect(0.15, 0.70, 0.50, 0.82), 1, NRect(0.5, 0.1, 0.85, 0.2))
         fragment.apply(rec, [pl], os.path.join(work, "с фрагментом.pdf")).close()
+        from .core import retouch
+        er = retouch.Stroke(retouch.ERASE, 0.5, ((0.3, 0.76),))          # стереть весь фрагмент
+        with pymupdf.open(acts) as d:
+            rgba = fragment.cut(d, 0, NRect(0.15, 0.70, 0.50, 0.82), "blue", 0.5, True, dpi=100, retouch=(er,))
+        assert int(rgba[..., 3].max()) == 0, "ластик не сделал фрагмент прозрачным"
         t = templates.Template("Акт ЦО «тест»", src_rect=NRect(0.1, 0.1, 0.5, 0.2))
         templates.save(t)
         assert templates.get(t.name) is not None
