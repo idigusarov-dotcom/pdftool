@@ -274,10 +274,12 @@ def test_drag_and_drop_and_open_files_route_to_screen(win, fake, tmp_path):
     md.setUrls([QUrl.fromLocalFile(c["acts"])])
     ev = QDropEvent(QPointF(10, 10), Qt.CopyAction, md, Qt.LeftButton, Qt.NoModifier)
     win.dropEvent(ev)
-    assert win.compress.path == c["acts"]
+    # на Windows Qt отдаёт путь со слэшами «/», а pytest — с «\»
+    assert os.path.normcase(os.path.normpath(win.compress.path)) == os.path.normcase(os.path.normpath(c["acts"]))
     png = logo(str(tmp_path / "лого.png"))
     win.open_files([png])                         # одна картинка — на экран «Картинка»
-    assert win.current() is win.image and win.image.img_path == png
+    assert win.current() is win.image
+    assert os.path.normcase(os.path.normpath(win.image.img_path)) == os.path.normcase(os.path.normpath(png))
     win.show_screen(win.helppage)
     win.open_files([c["receipts"]])               # со справки — на «Страницы»
     assert win.current() is win.pages and win.pages.grid.count() == 5
