@@ -326,7 +326,8 @@ class FragmentTab(QWidget, UndoMixin):
         elif prev_ink is not None:
             # тот же масштаб: стёрли край ластиком / сменили чувствительность — оставшиеся чернила не
             # растягиваются и не сдвигаются (раньше держалась ширина рамки, и фрагмент «вырастал»)
-            target = fr.follow_rect(old, prev_ink[2], new_ink[2], same_source=prev_ink[:2] == new_ink[:2])
+            target = fr.follow_rect(old, prev_ink[2], new_ink[2], same_source=prev_ink[:2] == new_ink[:2],
+                                    aspect=fr.page_aspect(self.src[self.sp_src.value() - 1].rect, page_rect))
         else:   # рамка «Куда» без известного масштаба: место и ширина, высота — по пропорциям фрагмента
             w = old.x1 - old.x0
             asp = (nat.y1 - nat.y0) / max(nat.x1 - nat.x0, 1e-6)

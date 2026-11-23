@@ -80,6 +80,12 @@ def test_follow_rect_keeps_scale_and_ink_position():
     other = fr.follow_rect(old_dst, old_ink, NRect(0.6, 0.1, 0.7, 0.15))    # другие чернила — в тот же угол
     assert (other.x0, other.y0) == pytest.approx((0.30, 0.60))
     assert other.x1 - other.x0 == pytest.approx(0.10)
+    # с учётом страниц масштаб одинаков по осям: рамка с неверными пропорциями выправляется
+    sq = fr.follow_rect(NRect(0.3, 0.6, 0.7, 0.65), old_ink, new_ink, aspect=1.0)
+    assert (sq.y1 - sq.y0) == pytest.approx((sq.x1 - sq.x0) / 0.3 * 0.1)
+    a4, a5 = pymupdf.Rect(0, 0, 595, 842), pymupdf.Rect(0, 0, 420, 595)
+    assert fr.page_aspect(a4, a4) == pytest.approx(1.0)
+    assert fr.page_aspect(a4, a5) == pytest.approx((842 * 420) / (595 * 595))
 
 
 @pytest.fixture
@@ -135,6 +141,9 @@ def test_edge_erase_does_not_enlarge_placed_fragment(win, tmp_path, monkeypatch)
     assert s1 == pytest.approx(s0, rel=0.01)                         # масштаб тот же (раньше рос на ~10–60%)
     assert d1.x1 == pytest.approx(d0.x1, abs=0.003)                  # правый край оставшихся чернил на месте
     assert d1.y0 == pytest.approx(d0.y0, abs=0.003)
+    # пропорции на «Куда» — настоящие (как у натурального размера)
+    nat = fr.natural_rect(f.src, 0, rect, f.cur_frac, f.dst[0].rect)
+    assert (d1.y1 - d1.y0) / (d1.x1 - d1.x0) == pytest.approx((nat.y1 - nat.y0) / (nat.x1 - nat.x0), rel=0.01)
     # смена чувствительности тоже не растягивает
     f.sl_sens.setValue(80)
     f.recut()
