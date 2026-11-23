@@ -93,6 +93,43 @@ def natural_rect(src_doc: pymupdf.Document, src_page: int, src_rect: NRect, rgba
     return NRect(max(0, x0), max(0, y0), max(0, x0) + w, max(0, y0) + h)
 
 
+def ink_rect(src_rect: NRect, rgba_frac) -> NRect:
+    """Где на исходной странице (в долях) лежат чернила обрезанного фрагмента."""
+    fx0, fy0, fx1, fy1 = rgba_frac
+    w, h = src_rect.x1 - src_rect.x0, src_rect.y1 - src_rect.y0
+    return NRect(src_rect.x0 + fx0 * w, src_rect.y0 + fy0 * h, src_rect.x0 + fx1 * w, src_rect.y0 + fy1 * h)
+
+
+def page_aspect(src_page_rect, dst_page_rect) -> float:
+    """Множитель для follow_rect(aspect=…): переводит масштаб по ширине в масштаб по высоте."""
+    return (src_page_rect.height * dst_page_rect.width) / (dst_page_rect.height * src_page_rect.width)
+
+
+def follow_rect(old_dst: NRect, old_ink: NRect, new_ink: NRect, same_source: bool = True,
+                aspect: float | None = None) -> NRect:
+    """Новая рамка на странице «Куда», когда поменялись границы чернил (стёрли край ластиком, вернули штрих,
+    сменили чувствительность, подвинули красную рамку). Масштаб (сколько места на «Куда» занимает доля
+    исходной страницы) сохраняется — фрагмент не растягивается. Если это те же чернила (тот же источник и
+    границы пересекаются) — оставшиеся штрихи остаются ровно на своём месте; иначе новый фрагмент встаёт
+    в тот же левый верхний угол в том же масштабе.
+    aspect — (высота «Откуда» × ширина «Куда») / (высота «Куда» × ширина «Откуда»): с ним масштаб берётся
+    по ширине и одинаков по обеим осям (пропорции фрагмента всегда настоящие, как раньше)."""
+    sx = (old_dst.x1 - old_dst.x0) / max(old_ink.x1 - old_ink.x0, 1e-9)
+    if aspect is None:
+        sy = (old_dst.y1 - old_dst.y0) / max(old_ink.y1 - old_ink.y0, 1e-9)
+    else:
+        sy = sx * aspect
+    w, h = (new_ink.x1 - new_ink.x0) * sx, (new_ink.y1 - new_ink.y0) * sy
+    overlap = (min(old_ink.x1, new_ink.x1) > max(old_ink.x0, new_ink.x0)
+               and min(old_ink.y1, new_ink.y1) > max(old_ink.y0, new_ink.y0))
+    if same_source and overlap:
+        x0 = old_dst.x0 + (new_ink.x0 - old_ink.x0) * sx
+        y0 = old_dst.y0 + (new_ink.y0 - old_ink.y0) * sy
+    else:
+        x0, y0 = old_dst.x0, old_dst.y0
+    return NRect(x0, y0, x0 + w, y0 + h)
+
+
 def apply(target_path: str, placements: list[Placement], out_path: Optional[str] = None) -> pymupdf.Document:
     """Ставит все фрагменты. С out_path — сохраняет (исходники не перезаписываются), иначе возвращает документ
     в памяти (для предпросмотра)."""
