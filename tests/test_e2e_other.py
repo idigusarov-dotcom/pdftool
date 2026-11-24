@@ -75,6 +75,9 @@ def test_sort_by_recognized_numbers_manual_fix_and_save(win, fake, tmp_path):
     s.set_values(v2)
     assert "27" in s.stat.text() and "повторы: 27" in s.stat.text()
     csv = str(tmp_path / "список.csv")
+    original = open(c["receipts"], "rb").read()
+    s.save_csv(c["receipts"])
+    assert open(c["receipts"], "rb").read() == original
     s.save_csv(csv)
     text = open(csv, encoding="utf-8-sig").read()
     assert "27" in text and "10" in text
@@ -89,6 +92,31 @@ def logo(path):
     d.ellipse((20, 10, 280, 140), fill=(30, 60, 200))
     im.save(path)
     return path
+
+
+def test_tall_image_fits_and_undo_restores_name(win, tmp_path):
+    pdf = tmp_path / "альбом.pdf"
+    with pymupdf.open() as doc:
+        doc.new_page(width=540, height=300)
+        doc.save(pdf)
+    tall = tmp_path / "маяк.png"
+    Image.new("RGB", (200, 620), "red").save(tall)
+    t = win.image
+    win.show_screen(t)
+    t.open_pdf(str(pdf))
+    t.open_image(str(tall))
+    rect = t.view.get_nrect()
+    assert 0 <= rect.x0 < rect.x1 <= 1 and 0 <= rect.y0 < rect.y1 <= 1
+    assert (rect.x1 - rect.x0) * 540 / ((rect.y1 - rect.y0) * 300) == pytest.approx(200 / 620)
+    other = logo(str(tmp_path / "парусник.png"))
+    t.open_image(other)
+    win.undo()
+    assert t.img_path == str(tall) and tall.name in t.dz_img.t.toolTip()
+    win.undo()
+    assert t.view.box is None and t.dz_img.property("loaded") == "false"
+    win.redo()
+    win.redo()
+    assert t.img_path == other and os.path.basename(other) in t.dz_img.t.toolTip()
 
 
 def test_image_on_selected_pages_white_removed(win, fake, tmp_path):
@@ -289,6 +317,8 @@ def test_last_folder_is_remembered(win, tmp_path):
     from app.ui.infra import last_dir, remember_dir
     f = tmp_path / "папка с актами" / "файл.pdf"
     f.parent.mkdir()
+    remember_dir(str(f))  # диалог сохранения возвращает путь до создания файла
+    assert last_dir() == str(f.parent)
     f.write_bytes(b"%PDF-1.4\n")
     remember_dir(str(f))
     assert last_dir() == str(f.parent)

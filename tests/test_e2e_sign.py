@@ -6,7 +6,9 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest  # noqa: E402
-from PySide6.QtWidgets import QDialog  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QPushButton, QSpinBox  # noqa: E402
 
 from app.core import signatures as sig  # noqa: E402
 from app.core.pdfutil import NRect  # noqa: E402
@@ -193,25 +195,38 @@ def test_template_roundtrip_and_zone(win, fake, tmp_path):
     assert [x.text for x in s.nums_rec] == meta["scenario"].receipts
 
 
-def test_preview_lists_every_receipt(win, fake, monkeypatch):
+def test_preview_renders_requested_receipt(win, fake, monkeypatch):
     meta = pair(fake, "missing")
     s = win.sign
     s.open_acts(meta["acts"])
     s.open_receipts(meta["receipts"])
     s.set_mapping(meta["expected"])
-    seen = {}
+    visited = []
+    original = sig.preview_page
 
-    def fake_exec(dlg):
-        from PySide6.QtWidgets import QLabel
-        labs = [lab.text() for lab in dlg.findChildren(QLabel) if lab.text().startswith("<b>Расписка")]
-        seen["labels"] = labs
-        shot(dlg, "sign_preview")
-        return 0
-    monkeypatch.setattr(QDialog, "exec", fake_exec)
-    s.preview()
-    labs = seen["labels"]
-    assert len(labs) == 5
-    assert "не ставим" in labs[2] and "акт стр. 3" in labs[0]
+    def track(job, index, dpi):
+        visited.append(index)
+        return original(job, index, dpi)
+
+    monkeypatch.setattr(sig, "preview_page", track)
+    QTest.mouseClick(s.btn_preview, Qt.LeftButton)
+    dlg = win.findChild(QDialog, "ReceiptPreview")
+    assert dlg.isVisible() and dlg.isModal()
+    assert wait_until(app, lambda: s._reviewed, timeout=5)
+    assert visited == [0]
+    source, = [label for label in dlg.findChildren(QLabel) if "акта" in label.text()]
+    assert "страницы 3" in source.text()
+    page = dlg.findChild(QSpinBox)
+    page.setValue(3)
+    assert source.text() == "Без подписи"
+    following, = [button for button in dlg.findChildren(QPushButton) if button.text() == "Далее"]
+    QTest.mouseClick(following, Qt.LeftButton)
+    QTest.mouseClick(following, Qt.LeftButton)
+    assert page.value() == page.maximum() == 5 and not following.isEnabled()
+    assert visited == [0, 2, 3, 4]
+    shot(dlg, "sign_preview")
+    QTest.mouseClick(dlg.findChild(QDialogButtonBox).button(QDialogButtonBox.Close), Qt.LeftButton)
+    assert not dlg.isVisible()
 
 
 def test_stamp_not_copied_with_signature(win, fake, tmp_path):

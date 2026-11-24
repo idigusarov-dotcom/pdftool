@@ -57,6 +57,7 @@ class ThumbLoader(QObject):
         with self._cv:
             self._stop = True
             self._cv.notify()
+        self._th.join()
 
     def _run(self):
         try:
@@ -93,11 +94,17 @@ def visible_rows(view) -> range:
         bot = view.rowAt(vp.height() - 1)
         n = view.rowCount()
     else:
-        top = view.indexAt(vp.rect().topLeft()).row()
-        bot = view.indexAt(vp.rect().bottomRight()).row()
+        # В сетке между миниатюрами есть свободное место. Углы viewport часто попадают
+        # в него даже в середине длинного документа, поэтому indexAt там возвращает -1.
         n = view.count()
-        if bot < 0:
-            bot = n - 1
+        cell = view.gridSize()
+        if not n or not vp.isVisible() or cell.isEmpty():
+            return range(0)
+        columns = max(1, vp.width() // cell.width())
+        offset = -view.visualItemRect(view.item(0)).top()
+        top = max(0, offset // cell.height()) * columns
+        last_line = max(0, (offset + vp.height() - 1) // cell.height())
+        bot = (last_line + 1) * columns - 1
     top = 0 if top < 0 else top
     bot = n - 1 if bot < 0 else bot
     return range(max(0, top - 5), min(n, bot + 10))

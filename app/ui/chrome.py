@@ -222,6 +222,8 @@ class DropZone(QFrame):
         super().__init__(parent)
         self.setObjectName("DropZone")
         self.setAcceptDrops(True)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self._pressed = False
         self.setCursor(Qt.PointingHandCursor)
         self.exts = exts
         self._title, self._hint, self._icon = title, hint, icon_name
@@ -240,6 +242,8 @@ class DropZone(QFrame):
         v.addWidget(self.t)
         v.addWidget(self.s)
         h.addLayout(v, 1)
+        for label in (self.ico, self.t, self.s):
+            label.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setToolTip(hint)
         self.set_loaded("")
 
@@ -253,12 +257,34 @@ class DropZone(QFrame):
         self.t.setText(self._title + (": " + text if text else ""))
         self.t.setToolTip(self.t.text())
         self.s.setText("Чтобы заменить — перетащите другой файл или нажмите" if text else self._hint)
+        self.setAccessibleName(self.t.text())
+        self.setAccessibleDescription(self.s.text())
         self.retheme()
         _repolish(self)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton:
-            self.clicked.emit()
+            self._pressed = True
+            e.accept()
+        else:
+            super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.LeftButton and self._pressed:
+            self._pressed = False
+            e.accept()
+            if self.rect().contains(e.position().toPoint()):
+                self.clicked.emit()
+        else:
+            super().mouseReleaseEvent(e)
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter):
+            e.accept()
+            if not e.isAutoRepeat():
+                self.clicked.emit()
+        else:
+            super().keyPressEvent(e)
 
     def dragEnterEvent(self, e):
         if pdf_paths(e.mimeData(), self.exts):
@@ -291,8 +317,9 @@ class Toast(QFrame):
         h.setContentsMargins(16, 10, 10, 10)
         h.setSpacing(10)
         ic = QLabel()
-        ic.setPixmap(style.icon({"error": "triangle-alert", "ok": "circle-check"}.get(kind, "info"),
-                                "white" if kind == "error" else style.colors()["surface"]).pixmap(QSize(20, 20)))
+        symbol, color = {"error": ("triangle-alert", "white"), "ok": ("circle-check", style.colors()["success"])}.get(
+            kind, ("info", style.colors()["accent"]))
+        ic.setPixmap(style.icon(symbol, color).pixmap(QSize(20, 20)))
         h.addWidget(ic)
         self.label = QLabel(text)
         self.label.setWordWrap(True)
@@ -304,6 +331,7 @@ class Toast(QFrame):
             h.addWidget(b)
         x = QPushButton("✕")
         x.setToolTip("Закрыть")
+        x.setAccessibleName("Закрыть уведомление")
         x.clicked.connect(self.close_now)
         h.addWidget(x)
         _repolish(self)

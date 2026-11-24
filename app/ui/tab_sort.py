@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QProgressDialo
 
 from ..core import numbers, sorting
 from ..core.logsetup import log
-from ..core.pdfutil import NRect, safe_output_path
+from ..core.pdfutil import NRect, PdfError, check_output_path, safe_output_path
 from . import style
 from .infra import UndoMixin, load_rect, run_task, save_rect, settings
 from .chrome import Collapsible, DropZone, ScreenHeader
@@ -391,7 +391,10 @@ class SortTab(QWidget, UndoMixin):
         out = out or ask_save(self, safe_output_path(self.path, "список_квартир", ".csv"), "CSV (*.csv)")
         if out:
             try:
+                check_output_path(out, (self.path,))
                 sorting.export_csv(self.values_by_page(), out)
+            except PdfError as e:
+                return error(self, str(e))
             except PermissionError:
                 return error(self, f"Не удалось записать «{os.path.basename(out)}»: файл открыт в Excel или другой "
                                    "программе (закройте его) или нет прав на запись в эту папку.")

@@ -6,8 +6,8 @@ import os
 import pymupdf
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QPixmap
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QHBoxLayout,
-                               QLabel, QProgressDialog, QRadioButton, QScrollArea, QSlider, QSplitter, QTableWidget,
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QHBoxLayout,
+                               QLabel, QProgressDialog, QRadioButton, QSlider, QSplitter, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..core import numbers
@@ -19,6 +19,7 @@ from ..core.pdfutil import Cancelled, NRect, safe_output_path
 from . import style
 from .infra import UndoMixin, load_rect, run_task, save_rect, settings
 from .chrome import Collapsible, DropZone, ScreenHeader
+from .preview import open_preview
 from .templbar import TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
 from .widgets import (try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar, card, progress_window)
@@ -608,35 +609,17 @@ class SignTab(QWidget, UndoMixin):
 
     # ---------- результат ----------
     def preview(self):
-        if not self.job:
+        job = self.job
+        if not job:
             return error(self, "Сначала откройте акты и расписки.")
-        self._reviewed = True
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            dlg = QDialog(self)
-            dlg.setWindowTitle("Предпросмотр")
-            dlg.resize(900, 800)
-            area = QScrollArea(dlg)
-            area.setWidgetResizable(True)
-            inner = QWidget()
-            v = QVBoxLayout(inner)
-            for i in range(len(self.rec)):
-                try:
-                    img = sig.preview_page(self.job, i, dpi=70)
-                except Exception as e:  # noqa: BLE001
-                    log.exception("Предпросмотр")
-                    dlg.deleteLater()
-                    return error(self, f"Не удалось показать предпросмотр: {e}")
-                lab = QLabel()
-                lab.setPixmap(np_to_pixmap(img))
-                m = self.job.mapping[i]
-                v.addWidget(QLabel(f"<b>Расписка стр. {i + 1}</b> ← " + ("не ставим" if m is None else f"акт стр. {m + 1}")))
-                v.addWidget(lab)
-            area.setWidget(inner)
-            QVBoxLayout(dlg).addWidget(area)
-        finally:
-            QApplication.restoreOverrideCursor()
-        dlg.exec()
+        def render(index):
+            pixmap = np_to_pixmap(sig.preview_page(job, index, dpi=110))
+            act = job.mapping[index]
+            if job is self.job:
+                self._reviewed = True
+            return pixmap, "Без подписи" if act is None else f"Подпись из акта со страницы {act + 1}"
+
+        open_preview(self, "Предпросмотр расписок", "ReceiptPreview", "Расписка", len(self.rec), render)
 
     def save(self, out: str = ""):
         if not self.job:

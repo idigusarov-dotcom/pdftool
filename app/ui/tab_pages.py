@@ -3,18 +3,17 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QEvent, QItemSelectionModel, QSignalBlocker, QSize, Qt, QTimer
+from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut, QTransform
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QVBoxLayout, QWidget)
-
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QIcon, QPixmap, QTransform
 
 from ..core import pages
 from ..core.logsetup import log
 from ..core.pdfutil import Cancelled, safe_output_path
 from .infra import UndoMixin, last_dir, remember_dir
-from .thumbs import ThumbLoader, placeholder_icon, visible_rows
+from .preview import open_preview
+from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
 from .chrome import DropZone, ScreenHeader
 from .widgets import try_open_pdf, open_folder, ask_open_pdf, ask_save, big_button, error, info, progress_window
 
@@ -25,6 +24,7 @@ class PagesTab(QWidget, UndoMixin):
         self.init_undo()
         self.loader = None
         self._pix: dict[int, QPixmap] = {}
+        self._placeholder = placeholder_icon(110, 150)
         self.doc = None
         self.path = ""
         outer = QVBoxLayout(self)
@@ -53,12 +53,14 @@ class PagesTab(QWidget, UndoMixin):
         v.addWidget(hint)
         self.merge_list = QListWidget()
         self.merge_list.setDragDropMode(QAbstractItemView.InternalMove)
-        self.merge_list.setStyleSheet("font-size: 14px;")
+        self.merge_list.setObjectName("MergeFiles")
+        self.merge_list.setTextElideMode(Qt.ElideMiddle)
         self.merge_list.model().rowsMoved.connect(lambda *_: self.commit("порядок файлов"))
         v.addWidget(self.merge_list, 1)
         row = QHBoxLayout()
         row.addWidget(big_button("➕ Добавить…", self.add_files))
-        row.addWidget(big_button("➖ Убрать", self.remove_file))
+        self.btn_remove_file = big_button("➖ Убрать", self.remove_file)
+        row.addWidget(self.btn_remove_file)
         v.addLayout(row)
         self.btn_merge = big_button("Объединить и сохранить…", self.do_merge, primary=True, icon_name="combine",
                                     tip="Склеить файлы списка в один новый PDF")
@@ -75,11 +77,12 @@ class PagesTab(QWidget, UndoMixin):
         self.dz.files.connect(lambda ps: self.open(ps[0]))
         top.addWidget(self.dz, 1)
         v2.addLayout(top)
-        hint2 = QLabel("Выделяйте страницы мышью (Ctrl — несколько), перетаскивайте для смены порядка.")
+        hint2 = QLabel("Двойной щелчок — просмотр. Shift — диапазон, Ctrl — отдельные страницы.")
         hint2.setObjectName("Muted")
         hint2.setWordWrap(True)
         v2.addWidget(hint2)
         self.grid = QListWidget()
+        self.grid.setObjectName("PageThumbnails")
         self.grid.setViewMode(QListWidget.IconMode)
         self.grid.setIconSize(QSize(110, 150))
         self.grid.setGridSize(QSize(130, 185))
@@ -89,13 +92,29 @@ class PagesTab(QWidget, UndoMixin):
         self.grid.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.grid.model().rowsMoved.connect(lambda *_: self.commit("порядок страниц"))
         self.grid.verticalScrollBar().valueChanged.connect(self.request_thumbs)
+        self.grid.viewport().installEventFilter(self)
         v2.addWidget(self.grid, 1)
+        selection = QHBoxLayout()
+        self.selection_count = QLabel()
+        self.selection_count.setObjectName("Muted")
+        selection.addWidget(self.selection_count, 1)
+        self.btn_preview = big_button("Просмотр", lambda: self.preview(), icon_name="eye",
+                                      tip="Открыть страницу крупно (Enter или двойной щелчок)")
+        self.btn_extract = big_button("Извлечь…", lambda: self.save(selected_only=True), icon_name="download",
+                                      tip="Сохранить выделенные страницы в один PDF с текущими поворотами")
+        selection.addWidget(self.btn_preview)
+        selection.addWidget(self.btn_extract)
+        v2.addLayout(selection)
+        self.grid.itemDoubleClicked.connect(lambda item: self.preview(self.grid.row(item)))
+        for key in (Qt.Key_Return, Qt.Key_Enter):
+            QShortcut(QKeySequence(key), self.grid, context=Qt.WidgetShortcut, activated=self.preview)
         ops = QHBoxLayout()
         self.btn_rot = big_button("Вправо", lambda: self.rotate(90), icon_name="rotate-cw",
                                   tip="Повернуть выделенные страницы по часовой стрелке")
         ops.addWidget(self.btn_rot)
-        ops.addWidget(big_button("Влево", lambda: self.rotate(-90), icon_name="rotate-ccw",
-                                  tip="Повернуть выделенные страницы против часовой стрелки"))
+        self.btn_left = big_button("Влево", lambda: self.rotate(-90), icon_name="rotate-ccw",
+                                   tip="Повернуть выделенные страницы против часовой стрелки")
+        ops.addWidget(self.btn_left)
         self.btn_del = big_button("Удалить", self.delete, icon_name="trash-2",
                                   tip="Удалить выделенные страницы (в новом файле)")
         ops.addWidget(self.btn_del)
@@ -105,18 +124,46 @@ class PagesTab(QWidget, UndoMixin):
         ops.addWidget(self.btn_save)
         v2.addLayout(ops)
         sp = QHBoxLayout()
-        sp.addWidget(QLabel("Разделить:"))
+        sp.addWidget(QLabel("Разделить исходник:"))
         self.ed_ranges = QLineEdit()
         self.ed_ranges.setPlaceholderText("например 1-3, 4-6, 7")
         sp.addWidget(self.ed_ranges)
         self.ed_ranges.setToolTip("Номера страниц для каждой части через запятую")
         self.btn_split = big_button("✂ По диапазонам…", self.split_ranges)
         sp.addWidget(self.btn_split)
-        sp.addWidget(big_button("Каждая отдельно…", self.split_every, icon_name="scissors",
-                              tip="Сохранить каждую страницу отдельным PDF"))
+        self.btn_split_every = big_button("Каждая отдельно…", self.split_every, icon_name="scissors",
+                                          tip="Сохранить каждую страницу исходного PDF отдельно")
+        sp.addWidget(self.btn_split_every)
         v2.addLayout(sp)
         lay.addWidget(g2, 2)
+        for widget, remove in ((self.grid, self.delete), (self.merge_list, self.remove_file)):
+            for key in (Qt.Key_Delete, Qt.Key_Backspace):
+                QShortcut(QKeySequence(key), widget, context=Qt.WidgetShortcut, activated=remove)
+        self.grid.itemSelectionChanged.connect(self._update_page_actions)
+        self.merge_list.itemSelectionChanged.connect(self._update_merge_actions)
+        self.ed_ranges.textChanged.connect(self._update_split_action)
+        self._update_page_actions()
+        self._update_merge_actions()
         self.reset_undo()
+
+    def _update_split_action(self):
+        self.btn_split.setEnabled(self.doc is not None and bool(self.ed_ranges.text().strip()))
+
+    def _update_page_actions(self):
+        total = self.grid.count()
+        selected = len(self.grid.selectedIndexes())
+        self.selection_count.setText(f"Выбрано {selected} из {total}" if total else "Страниц нет")
+        self.btn_save.setEnabled(total > 0)
+        self.btn_preview.setEnabled(total > 0)
+        for button in (self.btn_rot, self.btn_left, self.btn_del, self.btn_extract):
+            button.setEnabled(selected > 0)
+        self.ed_ranges.setEnabled(self.doc is not None)
+        self.btn_split_every.setEnabled(self.doc is not None)
+        self._update_split_action()
+
+    def _update_merge_actions(self):
+        self.btn_merge.setEnabled(self.merge_list.count() >= 2)
+        self.btn_remove_file.setEnabled(bool(self.merge_list.selectedItems()))
 
     # ---------- шаги, подсказка, перетаскивание ----------
     def step_index(self) -> int:
@@ -143,6 +190,8 @@ class PagesTab(QWidget, UndoMixin):
             Step(self.dz, "Правка одного PDF", "Откройте файл, страницы которого нужно изменить."),
             Step(self.grid, "Страницы", "Щёлкните страницу, чтобы выделить (Ctrl — несколько). "
                  "Перетащите, чтобы поменять порядок."),
+            Step(self.btn_extract, "Извлечь страницы", "Выделите нужные листы и сохраните их одним PDF. "
+                 "Порядок и повороты берутся из редактора."),
             Step(self.btn_rot, "Повернуть и удалить", "Кнопки работают с выделенными страницами."),
             Step(self.ed_ranges, "Разделить файл", "Впишите части, например «1-3, 4-6», и нажмите «По диапазонам». "
                  "Или «Каждая отдельно» — каждая страница станет отдельным файлом."),
@@ -165,6 +214,7 @@ class PagesTab(QWidget, UndoMixin):
             self._add_merge_item(p)
             added += 1
         if added:
+            self._update_merge_actions()
             self.commit("добавить файлы")
 
     def _add_merge_item(self, p):
@@ -176,6 +226,7 @@ class PagesTab(QWidget, UndoMixin):
     def remove_file(self):
         for it in self.merge_list.selectedItems():
             self.merge_list.takeItem(self.merge_list.row(it))
+        self._update_merge_actions()
         self.commit("убрать файл")
 
     # ---------- Ctrl+Z ----------
@@ -189,22 +240,42 @@ class PagesTab(QWidget, UndoMixin):
         self.merge_list.clear()
         for p in st["merge"]:
             self._add_merge_item(p)
-        self.grid.clear()
-        for i, rot in st["pages"]:
-            self._add_page_item(i, rot)
-        QTimer.singleShot(0, self.request_thumbs)
+        self._update_merge_actions()
+        selected = {item.data(Qt.UserRole) for item in self.grid.selectedItems()}
+        current = self.grid.currentItem()
+        current_id = current.data(Qt.UserRole) if current is not None else None
+        with QSignalBlocker(self.grid):
+            self.grid.clear()
+            for i, rot in st["pages"]:
+                item = self._add_page_item(i, rot)
+                if i in selected:
+                    item.setSelected(True)
+                if i == current_id:
+                    self.grid.setCurrentItem(item, QItemSelectionModel.NoUpdate)
+        self._update_page_actions()
+        QTimer.singleShot(0, self, self.request_thumbs)
 
     def _icon(self, i, rot):
         pm = self._pix.get(i)
         if pm is None:
-            return placeholder_icon(110, 150)
-        return QIcon(pm.transformed(QTransform().rotate(rot)) if rot else pm)
+            return self._placeholder
+        pixmap = pm.transformed(QTransform().rotate(rot)) if rot else pm
+        icon = QIcon(pixmap)
+        icon.addPixmap(pixmap, QIcon.Selected)
+        return icon
 
     def _add_page_item(self, i, rot=0):
         it = QListWidgetItem(self._icon(i, rot), f"стр. {i + 1}")
         it.setData(Qt.UserRole, i)
         it.setData(Qt.UserRole + 1, rot)
+        it.setSizeHint(self.grid.gridSize() - QSize(6, 6))
         self.grid.addItem(it)
+        return it
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.Show, QEvent.Resize) and obj is self.grid.viewport():
+            QTimer.singleShot(0, self, self.request_thumbs)
+        return super().eventFilter(obj, event)
 
     def request_thumbs(self, *_):
         if self.loader and self.grid.count():
@@ -247,6 +318,7 @@ class PagesTab(QWidget, UndoMixin):
         if doc is None:
             return
         self.path, self.doc = path, doc
+        self._saved = False
         self.dz.set_loaded(f"{os.path.basename(path)} · {len(self.doc)} стр.")
         self.grid.clear()
         self._pix = {}
@@ -256,7 +328,8 @@ class PagesTab(QWidget, UndoMixin):
         self.loader.ready.connect(self.thumb_ready)
         for i in range(len(self.doc)):
             self._add_page_item(i)
-        QTimer.singleShot(0, self.request_thumbs)
+        self._update_page_actions()
+        QTimer.singleShot(0, self, self.request_thumbs)
         self.reset_undo()
 
     def rotate(self, deg):
@@ -267,27 +340,53 @@ class PagesTab(QWidget, UndoMixin):
         self.commit("поворот")
 
     def delete(self):
-        for it in self.grid.selectedItems():
-            self.grid.takeItem(self.grid.row(it))
+        with QSignalBlocker(self.grid):
+            for it in self.grid.selectedItems():
+                self.grid.takeItem(self.grid.row(it))
+        self._update_page_actions()
         self.commit("удаление")
 
     def state(self):
         items = [self.grid.item(i) for i in range(self.grid.count())]
         return [it.data(Qt.UserRole) for it in items], {it.data(Qt.UserRole): it.data(Qt.UserRole + 1) for it in items}
 
-    def save(self, out: str = ""):
+    def preview(self, row=None):
+        if not self.grid.count():
+            return
+        doc = self.doc
+        order, rotations = self.state()
+        name = os.path.basename(self.path)
+
+        def render(index):
+            original = order[index]
+            pixmap = page_pixmap(doc, original, dpi=130)
+            rotation = rotations[original]
+            if rotation:
+                pixmap = pixmap.transformed(QTransform().rotate(rotation))
+            return pixmap, f"{name} · исходная страница {original + 1}"
+
+        start = max(0, self.grid.currentRow()) if row is None else row
+        open_preview(self, "Просмотр страниц", "PagesPreview", "Страница", len(order), render, start)
+
+    def save(self, out: str = "", *, selected_only: bool = False):
         if not self.doc:
             return error(self, "Сначала откройте PDF.")
         order, rot = self.state()
+        if selected_only:
+            selected = {item.data(Qt.UserRole) for item in self.grid.selectedItems()}
+            order = [i for i in order if i in selected]
+            if not order:
+                return error(self, "Выберите страницы для извлечения.")
         if not order:
             return error(self, "Не осталось ни одной страницы.")
-        out = out or ask_save(self, safe_output_path(self.path, "изменён"))
+        out = out or ask_save(self, safe_output_path(self.path, "выделенные" if selected_only else "изменён"))
         if out:
             try:
                 with progress_window(self, "Сохраняю страницы…") as prog:
                     n = prog.run(pages.rebuild, self.path, order, rot, out)
-                self.mark_saved()
-                self._saved = True
+                if not selected_only:
+                    self.mark_saved()
+                    self._saved = True
                 info(self, f"Готово! Сохранено страниц: {n}. Файл: {os.path.basename(out)}",
                      action=("Открыть папку", lambda: open_folder(out)))
             except Cancelled:

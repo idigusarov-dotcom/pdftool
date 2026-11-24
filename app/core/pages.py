@@ -18,6 +18,16 @@ def _insert(out: pymupdf.Document, src: pymupdf.Document, name: str, **kw) -> No
                        "(например, «Печать → PDF») и попробуйте снова.") from e
 
 
+def _copy_pages(out, src, name, order):
+    """Копируем диапазон целиком, чтобы MuPDF перенёс ссылки между страницами."""
+    if not order or min(order) < 0 or max(order) >= len(src):
+        raise PdfError("Выберите страницы в пределах документа.")
+    first, last = min(order), max(order)
+    _insert(out, src, name, from_page=first, to_page=last)
+    if order != list(range(first, last + 1)):
+        out.select([i - first for i in order])
+
+
 def merge(paths: list[str], out_path: str, progress=None) -> int:
     """progress(i, n) — по файлам; может бросить Cancelled (тогда ничего не сохраняется)."""
     out = pymupdf.open()
@@ -69,8 +79,7 @@ def split(path: str, groups: list[list[int]], out_dir: str, progress=None) -> li
                 progress(k, len(groups))
             out = pymupdf.open()
             try:
-                for i in g:
-                    _insert(out, src, os.path.basename(path), from_page=i, to_page=i)
+                _copy_pages(out, src, os.path.basename(path), g)
                 name = f"{base}_стр{g[0] + 1}" + (f"-{g[-1] + 1}" if len(g) > 1 else "") + ".pdf"
                 op = os.path.join(out_dir, name)
                 k2 = 2
@@ -94,22 +103,18 @@ def split_every_page(path: str, out_dir: str, progress=None) -> list[str]:
 
 def rebuild(path: str, order: list[int], rotations: dict[int, int], out_path: str, progress=None) -> int:
     """Новый файл: страницы в порядке `order` (удалённые просто не указаны), с поворотами."""
-    src = open_pdf(path)
-    out = pymupdf.open()
-    try:
+    with open_pdf(path) as src, pymupdf.open() as doc:
+        if progress:
+            progress(0, len(order))
+        _copy_pages(doc, src, os.path.basename(path), order)
         for k, i in enumerate(order):
             if progress and k % 10 == 0:
                 progress(k, len(order))
-            _insert(out, src, os.path.basename(path), from_page=i, to_page=i)
             rot = rotations.get(i, 0) % 360
             if rot:
-                p = out[-1]
+                p = doc[k]
                 p.set_rotation((p.rotation + rot) % 360)
-        n = len(out)
         if progress:
             progress(len(order), len(order))
-        save_doc(out, out_path, inputs=(path,))
-    finally:
-        out.close()
-        src.close()
-    return n
+        save_doc(doc, out_path, inputs=(path,))
+        return len(doc)

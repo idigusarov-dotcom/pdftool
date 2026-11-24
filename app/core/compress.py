@@ -16,7 +16,7 @@ from typing import Callable
 import pymupdf
 from PIL import Image
 
-from .pdfutil import Cancelled, PdfError, open_pdf, save_doc  # noqa: F401 — Cancelled для вызывающих
+from .pdfutil import Cancelled, PdfError, open_pdf, staged_pdf  # noqa: F401 — Cancelled для вызывающих
 
 
 @dataclass(frozen=True)
@@ -88,7 +88,7 @@ def _write_jpeg(doc: pymupdf.Document, xref: int, data: bytes, w: int, h: int, c
 
 
 def compress(path: str, out_path: str, level: str = DEFAULT_LEVEL,
-             progress: Callable[[int, int], None] | None = None) -> dict:
+             progress: Callable[[int, int], None] | None = None, *, only_if_smaller: bool = False) -> dict:
     """Сжимает PDF в новый файл. progress(i, n) может бросить Cancelled — тогда ничего не сохраняется.
     Возвращает {"before", "after", "images", "changed"} (размеры в байтах)."""
     lv = LEVELS[level]
@@ -115,10 +115,14 @@ def compress(path: str, out_path: str, level: str = DEFAULT_LEVEL,
             progress(len(items), len(items))
         if not use:
             raise PdfError("В этом PDF нет сканов-картинок — сжимать нечего.")
-        save_doc(doc, out_path, inputs=(path,))
+        with staged_pdf(doc, out_path, inputs=(path,)) as tmp:
+            after = os.path.getsize(tmp)
+            saved = not only_if_smaller or after < before * 0.97
+            if saved:
+                os.replace(tmp, out_path)
     finally:
         doc.close()
-    return {"before": before, "after": os.path.getsize(out_path), "images": len(use), "changed": changed}
+    return {"before": before, "after": after, "saved": saved, "images": len(use), "changed": changed}
 
 
 def human_size(n: int) -> str:

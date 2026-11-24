@@ -170,7 +170,7 @@ class CompressTab(QWidget, UndoMixin):
         t0 = time.monotonic()
         try:
             with progress_window(self, "Сжимаю картинки…") as prog:
-                rep = prog.run(cz.compress, self.path, out, level)
+                rep = prog.run(cz.compress, self.path, out, level, only_if_smaller=True)
         except Cancelled:
             return info(self, "Отменено — новый файл не создан.")
         except Exception as e:  # noqa: BLE001
@@ -184,12 +184,8 @@ class CompressTab(QWidget, UndoMixin):
         before, after = rep["before"], rep["after"]
         self.result.show()
         self.lbl_warn.hide()
-        if after >= before * 0.97:
-            # меньше почти не стало — лишний файл не оставляем
-            try:
-                os.remove(out)
-            except OSError:
-                pass
+        if not rep["saved"]:
+            self._saved = False
             self.last_out = self.path
             self.lbl_sizes.setText("Меньше не стало")
             self.lbl_detail.setText(f"Файл {cz.human_size(before)} уже хорошо сжат для этой степени. "

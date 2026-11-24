@@ -6,7 +6,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from . import style
 
@@ -88,7 +88,7 @@ class TourOverlay(QWidget):
         self.text.setText(style.key(st.text))
         self.b_back.setEnabled(self.i > 0)
         self.b_next.setText("Готово" if self.i == len(self.steps) - 1 else "Далее")
-        QTimer.singleShot(0, self._reveal)    # дать виджету раскрыться
+        QTimer.singleShot(0, self, self._reveal)    # дать виджету раскрыться
         self._reveal()
 
     def _reveal(self):
@@ -160,7 +160,7 @@ class TourOverlay(QWidget):
 
     def eventFilter(self, obj, e):
         if obj is self.host and e.type() in (QEvent.Resize, QEvent.Move):
-            QTimer.singleShot(0, self.relayout)
+            QTimer.singleShot(0, self, self.relayout)
         return False
 
     def paintEvent(self, _):
@@ -180,6 +180,18 @@ class TourOverlay(QWidget):
 
     def mousePressEvent(self, e):
         e.accept()   # клики мимо подсказки не проходят в программу
+
+    def focusNextPrevChild(self, forward):
+        if not self.isVisible():
+            return super().focusNextPrevChild(forward)
+        buttons = [b for b in (self.b_close, self.b_back, self.b_next) if b.isEnabled()]
+        current = QApplication.focusWidget()
+        if current in buttons:
+            index = (buttons.index(current) + (1 if forward else -1)) % len(buttons)
+        else:
+            index = 0 if forward else -1
+        buttons[index].setFocus(Qt.TabFocusReason if forward else Qt.BacktabFocusReason)
+        return True
 
     def keyPressEvent(self, e):
         k = e.key()

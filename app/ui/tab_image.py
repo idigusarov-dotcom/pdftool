@@ -132,6 +132,7 @@ class ImageTab(QWidget, UndoMixin):
         self.chk_white.setChecked(st["white"])
         self.chk_white.blockSignals(False)
         self.img_path = st["img"]
+        self.dz_img.set_loaded(os.path.basename(self.img_path))
         if self.img_path:
             try:
                 self.img = imageinsert.load_image(self.img_path, st["white"])
@@ -150,6 +151,7 @@ class ImageTab(QWidget, UndoMixin):
             if doc is None:
                 return
             self.path, self.doc = path, doc
+            self._saved = False
             self.spin.setMaximum(len(self.doc))
             self.lbl.setText(f"из {len(self.doc)}")
             self.dz_pdf.set_loaded(f"{os.path.basename(path)} · {len(self.doc)} стр.")
@@ -190,9 +192,12 @@ class ImageTab(QWidget, UndoMixin):
         nr = None if initial else self.view.get_nrect()
         if nr is None:
             pr = self.doc[self.spin.value() - 1].rect
-            w = 0.3
-            h = w * pr.width / pr.height * self.img.height / self.img.width
-            nr = NRect(0.35, 0.4, 0.35 + w, 0.4 + h)
+            aspect = pr.width / pr.height * self.img.height / self.img.width
+            w = min(0.3, 0.6 / aspect)
+            h = w * aspect
+            x = (1 - w) / 2
+            y = min(0.4, (1 - h) / 2)
+            nr = NRect(x, y, x + w, y + h)
         self.view.set_nrect(nr, pm, emit=False)
 
     def show_page(self, *_):

@@ -8,7 +8,7 @@ from typing import Optional
 
 import pymupdf
 
-from .pdfutil import save_doc, open_pdf
+from .pages import rebuild
 
 _APT_RE = re.compile(r"кв(?:артир[аы])?\.?\s*(?:№|N)?\s*_*\s*(\d{1,4})", re.IGNORECASE)
 
@@ -43,14 +43,8 @@ def sorted_order(values: list[Optional[str]]) -> list[int]:
 
 
 def export_sorted(src_path: str, values: list[Optional[str]], out_path: str) -> list[int]:
-    src = open_pdf(src_path)
     order = sorted_order(values)
-    out = pymupdf.open()
-    for i in order:
-        out.insert_pdf(src, from_page=i, to_page=i)
-    save_doc(out, out_path, inputs=(src_path,))
-    out.close()
-    src.close()
+    rebuild(src_path, order, {}, out_path)
     return order
 
 

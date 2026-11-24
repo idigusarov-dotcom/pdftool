@@ -5,6 +5,8 @@ import errno
 import os
 import re
 import sys
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import numpy as np
@@ -194,21 +196,19 @@ def windows_name_problem(name: str) -> str:
     return ""
 
 
-def save_doc(doc: pymupdf.Document, out_path: str, inputs: list[str] | tuple[str, ...] = ()) -> str:
-    """Сохраняет документ; запрещает запись поверх входных файлов.
-    Пишет сначала во временный файл рядом и только потом подменяет: при сбое старый файл не портится."""
+@contextmanager
+def staged_pdf(doc: pymupdf.Document, out_path: str, inputs=()):
+    """Записывает PDF рядом с целью. Вызывающий переносит готовый файл через os.replace."""
     check_output_path(out_path, inputs)
     d = os.path.dirname(os.path.abspath(out_path))
     name = os.path.basename(out_path)
     # короткое имя временного файла: длинное имя результата + «.tmp» не должно упереться в предел длины
-    tmp = os.path.join(d, f"~pdftool.{os.getpid()}.{id(doc) % 100000}.tmp")
+    tmp = None
     try:
-        # сначала создаём файл средствами Python: так права, место и недопустимые имена дают обычные
-        # ошибки Windows (а не сообщения MuPDF на английском)
-        with open(tmp, "wb"):
-            pass
+        with tempfile.NamedTemporaryFile(dir=d, prefix="~pdftool.", suffix=".tmp", delete=False) as f:
+            tmp = f.name
         doc.save(tmp, garbage=3, deflate=True)
-        os.replace(tmp, out_path)
+        yield tmp
     except PermissionError as e:
         raise PdfError(f"Не удалось записать «{name}»: файл открыт в другой программе "
                        "(закройте его) или нет прав на запись в эту папку.") from e
@@ -217,17 +217,23 @@ def save_doc(doc: pymupdf.Document, out_path: str, inputs: list[str] | tuple[str
     except RuntimeError as e:      # ошибки MuPDF при записи (нет места, сбой диска)
         raise PdfError(f"Не удалось записать «{name}». " + human_error(e)) from e
     finally:
-        if os.path.exists(tmp):
+        if tmp is not None:
             try:
                 os.remove(tmp)
             except OSError:
                 pass
+
+
+def save_doc(doc: pymupdf.Document, out_path: str, inputs: list[str] | tuple[str, ...] = ()) -> str:
+    """Атомарно сохраняет PDF, защищая входные файлы от перезаписи."""
+    with staged_pdf(doc, out_path, inputs) as tmp:
+        os.replace(tmp, out_path)
     return out_path
 
 
-def insert_png(page: pymupdf.Page, display_rect: pymupdf.Rect, png: bytes) -> None:
+def insert_png(page: pymupdf.Page, display_rect: pymupdf.Rect, png: bytes, mask: bytes | None = None) -> None:
     """Вставляет картинку так, как её видно на экране, с учётом /Rotate страницы.
     display_rect — в координатах отображаемой (повёрнутой) страницы."""
     rot = page.rotation % 360
     target = display_rect * page.derotation_matrix if rot else display_rect
-    page.insert_image(target, stream=png, keep_proportion=False, overlay=True, rotate=rot)
+    page.insert_image(target, stream=png, mask=mask, keep_proportion=False, overlay=True, rotate=rot)

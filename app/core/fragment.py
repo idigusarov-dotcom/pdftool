@@ -1,11 +1,14 @@
 """«Вырезать и перенести»: любой фрагмент (подпись, печать, надпись) со страницы PDF A на страницу PDF B."""
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import Optional
 
 import numpy as np
 import pymupdf
+from PIL import Image
 
 from . import retouch as rt
 from .ink import extract_ink, to_png_bytes
@@ -54,6 +57,18 @@ def trim(rgba: np.ndarray, pad: int = 6) -> tuple[np.ndarray, tuple[float, float
     return rgba[y0:y1, x0:x1], (x0 / w, y0 / h, x1 / w, y1 / h)
 
 
+def _extend_edge_colors(image: Image.Image) -> Image.Image:
+    """Заполняет RGB под прозрачностью соседними цветами для интерполяции PDF."""
+    alpha = image.getchannel("A")
+    rgb = image.convert("RGB")
+    if alpha.getextrema()[0] > 0 or image.size == (1, 1) or not alpha.getbbox():
+        return rgb
+    smaller = image.resize(((image.width + 1) // 2, (image.height + 1) // 2), Image.Resampling.BOX)
+    background = _extend_edge_colors(smaller).resize(image.size, Image.Resampling.BILINEAR)
+    background.paste(rgb, mask=alpha.point(lambda value: 255 if value else 0))
+    return background
+
+
 @dataclass
 class Placement:
     """Один перенос: откуда (файл, страница, рамка) и куда (страница, рамка) в целевом файле."""
@@ -79,6 +94,16 @@ class Placement:
                 rgba[..., 3] = (rgba[..., 3] * self.opacity).astype(np.uint8)
             self._png = to_png_bytes(rgba)
         return self._png
+
+    @cached_property
+    def pdf_image(self) -> tuple[bytes, bytes | None]:
+        png = self.png()
+        if not self.retouch:
+            return png, None
+        # При уменьшении PDF-просмотрщик фильтрует цвет и маску отдельно.
+        # Чёрный RGB стёртых пикселей дал бы тёмную кайму вдоль мазка.
+        with Image.open(io.BytesIO(png)) as image:
+            return to_png_bytes(_extend_edge_colors(image)), to_png_bytes(image.getchannel("A"))
 
 
 def natural_rect(src_doc: pymupdf.Document, src_page: int, src_rect: NRect, rgba_frac, dst_page_rect,
@@ -136,7 +161,7 @@ def apply(target_path: str, placements: list[Placement], out_path: Optional[str]
     doc = open_pdf(target_path)
     for pl in placements:
         page = doc[pl.dst_page]
-        insert_png(page, pl.dst_rect.to_points(page.rect), pl.png())
+        insert_png(page, pl.dst_rect.to_points(page.rect), *pl.pdf_image)
     if out_path:
         save_doc(doc, out_path, inputs=tuple({target_path, *[p.src_path for p in placements]}))
     return doc

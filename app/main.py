@@ -7,7 +7,7 @@ import traceback
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QDialogButtonBox, QFrame,
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QDialogButtonBox, QFileDialog, QFrame,
                                QGroupBox, QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
                                QRadioButton, QScrollArea, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
@@ -16,7 +16,7 @@ from .core.logsetup import log, log_dir, setup_logging
 from .ui import style
 from .ui.chrome import Collapsible, DropZone, Toast, pdf_paths
 from .ui.helppage import HelpPage
-from .ui.infra import settings
+from .ui.infra import last_dir, remember_dir, settings
 from .ui.tab_batch import BatchTab
 from .ui.tab_compress import CompressTab
 from .ui.tab_fragment import FragmentTab
@@ -127,9 +127,8 @@ class MainWindow(QMainWindow):
         lay = QHBoxLayout(h)
         lay.setContentsMargins(16, 6, 14, 6)
         lay.setSpacing(2)
-        lay.addStretch()
         self.btn_undo = self._tool("undo-2", "Отменить последнее действие (Ctrl + Z)", self.undo)
-        self.btn_redo = self._tool("redo-2", "Повторить (Ctrl + Y)", self.redo)
+        self.btn_redo = self._tool("redo-2", "Повторить (Ctrl + Shift + Z)" if IS_MAC else "Повторить (Ctrl + Y)", self.redo)
         self.btn_theme = self._tool("moon", "Тёмная / светлая тема", self.toggle_theme)
         self.btn_more = self._tool("info", "Ещё: журнал ошибок, о программе", None)
         m = QMenu(self)
@@ -143,17 +142,30 @@ class MainWindow(QMainWindow):
         self.btn_help.setToolTip("Показать, куда и зачем нажимать на этом экране")
         self.btn_help.setAccessibleName("Подсказки по этому экрану")
         self.btn_help.clicked.connect(self.start_tour)
-        for b in (self.btn_undo, self.btn_redo, self.btn_theme, self.btn_more, self.btn_help):
+        lay.addWidget(self.btn_undo)
+        lay.addWidget(self.btn_redo)
+        lay.addStretch()
+        for b in (self.btn_theme, self.btn_more, self.btn_help):
             lay.addWidget(b)
+        for tab in self.all_tabs():
+            tab.undo_stack.canUndoChanged.connect(self._sync_history_buttons)
+            tab.undo_stack.canRedoChanged.connect(self._sync_history_buttons)
         return h
+
+    def _sync_history_buttons(self):
+        stack = getattr(self.current(), "undo_stack", None)
+        self.btn_undo.setEnabled(stack is not None and stack.canUndo())
+        self.btn_redo.setEnabled(stack is not None and stack.canRedo())
 
     def _tool(self, name, tip, slot):
         b = QToolButton()
         b.setIcon(style.icon(name))
         b.setProperty("icon_name", name)
         b.setIconSize(QSize(18, 18))
+        b.setMinimumSize(34, 34)
+        b.setFocusPolicy(Qt.StrongFocus)
         b.setToolTip(tip)
-        b.setAccessibleName(tip)           # кнопка-значок: имя для экранного диктора и UI Automation
+        b.setAccessibleName(style.key(tip))  # кнопка-значок: имя для экранного диктора и UI Automation
         if slot:
             b.clicked.connect(slot)
         return b
@@ -198,9 +210,9 @@ class MainWindow(QMainWindow):
                 v.addStretch()
             b = QPushButton(label)
             b.setCheckable(True)
-            b.setIcon(style.icon(ic, on_color="#ffffff"))
+            b.setIcon(style.icon(ic, on_color=style.colors()["accent"]))
             b.setProperty("icon_name", ic)
-            b.setProperty("icon_on", "#ffffff")
+            b.setProperty("icon_on", style.colors()["accent"])
             b.setIconSize(QSize(18, 18))
             b.setToolTip(tip)
             b.setAccessibleName(label)     # в узком окне текста нет — имя для экранного диктора и UI Automation
@@ -238,9 +250,25 @@ class MainWindow(QMainWindow):
             b.style().unpolish(b)
             b.style().polish(b)
 
+    def _save_current(self):
+        tab = self.current()
+        if tab is self.pages:
+            focus = QApplication.focusWidget()
+            in_merge = focus is not None and self.pages.card_merge.isAncestorOf(focus)
+            if in_merge or not self.pages.btn_save.isEnabled():
+                self.pages.btn_merge.click()
+                return
+        button = getattr(tab, "btn_save", None)
+        if button is not None:
+            button.click()
+
     def _actions(self):
+        self.save_action = QAction("Сохранить копию PDF…", self)
+        self.save_action.setShortcut(QKeySequence.Save)
+        self.save_action.triggered.connect(self._save_current)
         if IS_MAC:          # на Mac сочетания клавиш живут в строке меню (⌘Z, ⇧⌘Z, ⌘?)
             return
+        self.addAction(self.save_action)
         for seq, fn in ((QKeySequence.Undo, self.undo), (QKeySequence.Redo, self.redo),
                         (QKeySequence("Ctrl+Shift+Z"), self.redo), (QKeySequence.HelpContents, self.start_tour)):
             a = QAction(self)
@@ -253,6 +281,8 @@ class MainWindow(QMainWindow):
         переносит в меню приложения."""
         mb = self.menuBar()
         app_m = mb.addMenu("Файл")
+        app_m.addAction("Открыть…", self.choose_files).setShortcut(QKeySequence.Open)
+        app_m.addAction(self.save_action)
         a = app_m.addAction("О программе «PDF-помощник»", self.about)
         a.setMenuRole(QAction.AboutRole)
         a = app_m.addAction("Настройки…", self.preferences)
@@ -326,6 +356,8 @@ class MainWindow(QMainWindow):
         self.clear_toasts()          # уведомления прошлого экрана здесь уже не к месту
         key = SCREENS[i][0]
         self.nav[key].setChecked(True)
+        self.save_action.setEnabled(hasattr(self.current(), "btn_save"))
+        self._sync_history_buttons()
         self.refresh_steps()
         if key == "help":
             self.helppage.refresh()
@@ -344,9 +376,9 @@ class MainWindow(QMainWindow):
         s = settings()
         if s.value(f"tour/{key}", False, type=bool):
             return
-        s.setValue(f"tour/{key}", True)
         if SCREENS[self.tabs.currentIndex()][0] != key:
             return
+        s.setValue(f"tour/{key}", True)
         self.toast(f"Впервые на экране «{SCREENS[self.tabs.currentIndex()][1]}»? Покажу, куда и зачем нажимать.",
                    "info", action=("Показать", self.start_tour), timeout_ms=12000)
 
@@ -361,6 +393,7 @@ class MainWindow(QMainWindow):
             self.tour = None
             for c, was in opened.items():   # вернуть «Дополнительно» как было
                 c.set_expanded(was)
+            self.current().header.help.setFocus()
         self.tour.finished.connect(done)
         return self.tour
 
@@ -434,7 +467,14 @@ class MainWindow(QMainWindow):
 
     def preferences(self):
         """Окно «Настройки»: оформление (как в системе / светлое / тёмное)."""
+        for existing in self.findChildren(QDialog, "PreferencesDialog"):
+            if existing.isVisible():
+                existing.raise_()
+                existing.activateWindow()
+                return existing
         d = QDialog(self)
+        d.setObjectName("PreferencesDialog")
+        d.setAttribute(Qt.WA_DeleteOnClose)
         d.setWindowTitle("Настройки")
         v = QVBoxLayout(d)
         v.setContentsMargins(20, 18, 20, 14)
@@ -452,6 +492,7 @@ class MainWindow(QMainWindow):
             v.addWidget(r)
         hint = QLabel("«Как в системе» — тема меняется вместе с настройкой\n"
                       + ("«Внешний вид» в Системных настройках macOS." if IS_MAC else "Windows (светлый/тёмный режим)."))
+        hint.setWordWrap(True)
         hint.setObjectName("Muted")
         v.addWidget(hint)
         bb = QDialogButtonBox(QDialogButtonBox.Close)
@@ -459,16 +500,17 @@ class MainWindow(QMainWindow):
         bb.button(QDialogButtonBox.Close).setText("Закрыть")
         v.addWidget(bb)
         d.radios = radios
-        if os.environ.get("PDFTOOL_NO_MODAL"):
-            d.show()
-            return d
-        d.exec()
+        d.resize(380, d.sizeHint().height())
+        d.open()
+        radios[cur].setFocus()
         return d
 
     def retheme(self):
         self.btn_theme.setProperty("icon_name", "sun" if style.is_dark() else "moon")
         for b in self.findChildren(QToolButton) + self.findChildren(QPushButton):
             n = b.property("icon_name")
+            if b.property("icon_on"):
+                b.setProperty("icon_on", style.colors()["accent"])
             if n:
                 b.setIcon(style.icon(n, "#ffffff" if b.property("kind") == "primary" else None,
                                      on_color=b.property("icon_on")))
@@ -494,21 +536,26 @@ class MainWindow(QMainWindow):
 
     def dropEvent(self, e):
         ps = pdf_paths(e.mimeData(), (".pdf", ".png", ".jpg", ".jpeg"))
-        w = self.current()
-        if ps and hasattr(w, "accept_files"):
+        if ps:
             e.acceptProposedAction()
-            w.accept_files(ps)
+            self.open_files(ps)
+
+    def choose_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Открыть", last_dir(), "PDF и картинки (*.pdf *.png *.jpg *.jpeg)")
+        if paths:
+            remember_dir(paths[0])
+            self.open_files(paths)
 
     def open_files(self, paths: list[str]):
         """Файлы, открытые через систему (перетащили на значок в Dock, «Открыть с помощью»)."""
-        paths = [p for p in paths if os.path.isfile(p)]
+        paths = [p for p in paths if p.lower().endswith((".pdf", ".png", ".jpg", ".jpeg")) and os.path.isfile(p)]
         if not paths:
             return
         self.raise_()
         self.activateWindow()
         w = self.current()
-        if all(not p.lower().endswith(".pdf") for p in paths):
-            w = self.image            # одни картинки — на экран «Картинка»
+        if any(not p.lower().endswith(".pdf") for p in paths):
+            w = self.image            # Finder может прислать PDF и картинку для вставки вместе
         elif not hasattr(w, "accept_files"):
             w = self.pages            # со «Справки» — просто открыть PDF на «Страницах»
         self.show_screen(w)
@@ -549,6 +596,10 @@ class MainWindow(QMainWindow):
             if ans != QMessageBox.Yes:
                 e.ignore()
                 return
+        for tab in (self.pages, self.sort):
+            if tab.loader is not None:
+                tab.loader.stop()
+                tab.loader = None
         e.accept()
 
 
@@ -587,27 +638,31 @@ class PdfApp(QApplication):
     «Открыть с помощью»). Файлы, пришедшие до создания окна, ждут в очереди."""
 
     def __init__(self, argv):
-        super().__init__(argv)
         self.window = None
         self.pending: list[str] = []
+        super().__init__(argv)
+        self._open_timer = QTimer(self)
+        self._open_timer.setSingleShot(True)
+        self._open_timer.timeout.connect(self._open_pending)
 
     def event(self, e):
         if e.type() == QEvent.FileOpen:
             p = e.file() or e.url().toLocalFile()
             if p:
-                p = os.path.normpath(p)
+                self.pending.append(os.path.normpath(p))
                 if self.window is not None:
-                    self.window.open_files([p])
-                else:
-                    self.pending.append(p)
+                    self._open_timer.start(0)
             return True
         return super().event(e)
 
     def set_window(self, w):
         self.window = w
         if self.pending:
-            ps, self.pending = self.pending, []
-            QTimer.singleShot(0, lambda: w.open_files(ps))
+            self._open_timer.start(0)
+
+    def _open_pending(self):
+        paths, self.pending = self.pending, []
+        self.window.open_files(paths)
 
 
 def setup_app(app):

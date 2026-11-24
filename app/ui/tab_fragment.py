@@ -145,7 +145,6 @@ class FragmentTab(QWidget, UndoMixin):
         self.btn_remove = big_button("", self.remove_placed, icon_name="x", ghost=True,
                                      tip="Убрать выделенный фрагмент из списка")
         rowl.addWidget(self.btn_remove)
-        mid.setMinimumWidth(220)
         mid.setMaximumWidth(300)
         self.card_mid = mid
         split.addWidget(mid)
@@ -370,9 +369,13 @@ class FragmentTab(QWidget, UndoMixin):
         mode, sens, keep = self._params()
         dlg = RetouchDialog(self, self.src, self.sp_src.value() - 1, nr, mode, sens, keep, self.cur_retouch)
         self._retouch_dlg = dlg           # для проверок и снимков экрана
-        if dlg.exec() != RetouchDialog.Accepted:
-            return
-        new = dlg.strokes()
+        try:
+            if dlg.exec() != RetouchDialog.Accepted:
+                return
+            new = dlg.strokes()
+        finally:
+            self._retouch_dlg = None
+            dlg.deleteLater()
         if new == self.cur_retouch:
             return
         self.cur_retouch = new

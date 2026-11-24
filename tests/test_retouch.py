@@ -132,6 +132,25 @@ def test_mode_none_erase_makes_transparent(src):
 
 
 # ---------- перенос и сохранение ----------
+def test_erasing_dot_leaves_uniform_paper_after_export(tmp_path):
+    paper = (0.96, 0.94, 0.88)
+    src, dst, out = (str(tmp_path / name) for name in ("до.pdf", "бумага.pdf", "после.pdf"))
+    with pymupdf.open() as doc:
+        page = doc.new_page(width=180, height=120)
+        page.draw_rect(page.rect, color=None, fill=paper)
+        doc.save(dst)
+        page.draw_circle((90, 60), 4, color=None, fill=(0.1, 0.2, 0.3))
+        doc.save(src)
+    rect = NRect(0.25, 0.25, 0.75, 0.75)
+    erase = rt.Stroke(rt.ERASE, 0.06, ((0.5, 0.5),))
+    pl = fr.Placement(src, 0, rect, 0, rect, "none", retouch=(erase,))
+    fr.apply(dst, [pl], out).close()
+    with pymupdf.open(out) as result, pymupdf.open(dst) as reference:
+        for dpi in (72, 144):
+            delta = render_page(result, 0, dpi).astype(int) - render_page(reference, 0, dpi)
+            assert np.abs(delta).max() <= 3
+
+
 def test_placement_png_and_saved_pdf_keep_edits(src, dst, tmp_path):
     dst_rect = NRect(0.1, 0.1, 0.6, 0.2)
     plain = fr.Placement(src, 0, RECT, 0, dst_rect, "blue", 0.5, True)
@@ -216,6 +235,29 @@ def test_dialog_erase_restore_undo_redo_reset(src):
     dlg.smaller()
     dlg.smaller()
     assert dlg.view.radius < 14
+
+
+def test_pinch_in_retouch_dialog(src):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QNativeGestureEvent, QPointingDevice
+
+    dlg = _dialog(src)
+    dlg.show()
+    app.processEvents()
+    pos = QPointF(24, 24)
+    event = QNativeGestureEvent(Qt.ZoomNativeGesture, QPointingDevice.primaryPointingDevice(),
+                                2, pos, pos, pos, 0.2, QPointF())
+    before = dlg.view.transform().m11()
+    app.sendEvent(dlg.view.viewport(), event)
+    assert dlg.view.transform().m11() == pytest.approx(before * 1.2)
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QDialog
+    dlg.resize(520, 400)
+    app.processEvents()
+    for button in (dlg.btn_restore, dlg.btn_reset, dlg.btn_ok):
+        assert button.width() >= button.minimumSizeHint().width()
+    QTest.keyClick(dlg.view, Qt.Key_Return)
+    assert dlg.result() == QDialog.Accepted
 
 
 def test_dialog_keeps_existing_edits(src):

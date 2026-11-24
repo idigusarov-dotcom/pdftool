@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QDialog, QGraphicsEllipseItem, QGraphicsPixmapItem,
                                QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QPushButton, QSlider,
@@ -79,6 +79,13 @@ class RetouchView(QGraphicsView):
         super().resizeEvent(e)
         if self._auto_fit:
             self.fit()
+
+    def viewportEvent(self, e):
+        if e.type() == QEvent.NativeGesture and e.gestureType() == Qt.ZoomNativeGesture:
+            self.zoom(1.0 + e.value())
+            e.accept()
+            return True
+        return super().viewportEvent(e)
 
     def wheelEvent(self, e):
         mods = e.modifiers()
@@ -232,7 +239,11 @@ class RetouchDialog(QDialog):
                         ("Ctrl+-", lambda: self.view.zoom(0.8))):
             QShortcut(QKeySequence(seq), self, activated=fn)
 
-        self.setMinimumSize(520, 380)
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
+        self.btn_ok.setDefault(True)
+        self.view.setFocus()
+        self.setMinimumHeight(380)
         if parent is not None and parent.window() is not None:
             pw = parent.window().size()
             self.resize(max(560, int(pw.width() * 0.8)), max(400, int(pw.height() * 0.8)))

@@ -162,11 +162,25 @@ def test_compress_screen(win, tmp_path):
     assert t.step_index() == 3
 
 
-def test_compress_screen_not_smaller_removes_file(win, tmp_path):
+def test_compress_screen_keeps_existing_file_when_not_smaller(win, tmp_path):
+    import io
+    src = tmp_path / "маленький.pdf"
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16), "red").save(buf, "PNG")
+    with pymupdf.open() as doc:
+        page = doc.new_page()
+        page.insert_image(page.rect, stream=buf.getvalue())
+        doc.save(src, garbage=3, deflate=True)
+    out = tmp_path / "другой.pdf"
+    original = src.read_bytes()
+    out.write_bytes(original)
     t = win.compress
     win.show_screen(t)
-    t.show_result({"before": 1000, "after": 990, "images": 1, "changed": 0}, str(tmp_path / "x.pdf"))
+    t.open(str(src))
+    t.save(str(out))
     assert "Меньше не стало" in t.lbl_sizes.text()
+    assert out.read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_batch_zero_signatures_is_warning(win):

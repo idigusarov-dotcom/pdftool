@@ -189,6 +189,7 @@ def test_tour_keys_and_header_button(win):
     from PySide6.QtCore import Qt
     from PySide6.QtTest import QTest
     win.show_screen(win.sort)
+    app.processEvents()
     win.btn_help.click()
     t = win.tour
     assert t is not None and t.i == 0
@@ -196,9 +197,15 @@ def test_tour_keys_and_header_button(win):
     assert t.i == 1
     QTest.keyClick(t, Qt.Key_Left)
     assert t.i == 0
-    QTest.keyClick(t, Qt.Key_Escape)
+    QTest.keyClick(t, Qt.Key_Tab)
+    assert t.b_close.hasFocus()
+    QTest.keyClick(t.b_close, Qt.Key_Backtab)
+    assert t.b_next.hasFocus()
+    QTest.keyClick(t.b_next, Qt.Key_Tab)
+    assert t.b_close.hasFocus()
+    QTest.keyClick(t.b_close, Qt.Key_Escape)
     app.processEvents()
-    assert win.tour is None
+    assert win.tour is None and win.sort.header.help.hasFocus()
     win.sort.header.help.click()          # «Как пользоваться» на экране
     assert win.tour is not None
     win.tour.close_tour()
@@ -207,8 +214,8 @@ def test_tour_keys_and_header_button(win):
 def test_first_visit_offer_once(win):
     from app.ui.infra import settings
     win._toasts.clear()
-    win.offer_tour("image")               # экран не текущий — только помечаем
-    assert settings().value("tour/image", False, type=bool)
+    win.offer_tour("image")               # ушли с экрана до появления предложения
+    assert not settings().value("tour/image", False, type=bool)
     win.show_screen(win.pages)
     n = len(win._toasts)
     win.offer_tour("pages")
@@ -343,7 +350,6 @@ def test_fragment_needs_files(win):
     assert len(win._toasts) == n + 1
 
 
-@pytest.mark.skipif(not os.path.exists(JOB2A), reason="нет job2")
 @pytest.mark.parametrize("scope", ["cur", "all", "sel"])
 @pytest.mark.parametrize("white", [False, True])
 def test_image_screen_position_rotated(win, tmp_path, scope, white):
@@ -352,10 +358,12 @@ def test_image_screen_position_rotated(win, tmp_path, scope, white):
     import pymupdf
     from app.core.pdfutil import NRect
     src = str(tmp_path / "rot.pdf")
-    d = pymupdf.open(JOB2A)
-    d[1].set_rotation(90)
-    d[3].set_rotation(270)
-    d.save(src)
+    with pymupdf.open() as doc:
+        for _ in range(5):
+            doc.new_page()
+        doc[1].set_rotation(90)
+        doc[3].set_rotation(270)
+        doc.save(src)
     png = str(tmp_path / "i.png")
     from PIL import Image
     Image.new("RGB", (300, 60), (20, 40, 200)).save(png)

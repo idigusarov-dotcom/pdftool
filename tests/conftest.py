@@ -10,6 +10,13 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "qa"))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def qt_settings_dir(tmp_path_factory):
+    if sys.platform.startswith("linux"):
+        from PySide6.QtCore import QSettings
+        QSettings.setPath(QSettings.NativeFormat, QSettings.UserScope, str(tmp_path_factory.mktemp("qt_settings")))
+
+
 @pytest.fixture(scope="session")
 def fake(tmp_path_factory):
     from fake_scans import Scenario, make_pair

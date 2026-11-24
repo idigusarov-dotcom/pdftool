@@ -15,16 +15,18 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 codesign -dv "$APP" 2>&1 | grep -E "Identifier|Signature|Format" || true
 
 echo "== dmg"
-rm -f "$OUT"
-if python -m dmgbuild -s tools/dmg_settings.py -D app="$APP" -D icon=app/ui/assets/PdfTool.icns "$VOL" "$OUT"; then
+STAGE="$(mktemp -d "$(dirname "$OUT")/.pdftool-dmg.XXXXXX")"
+trap 'rm -rf "$STAGE"' EXIT
+IMAGE="$STAGE/PdfTool.dmg"
+if python -m dmgbuild -s tools/dmg_settings.py -D app="$APP" -D icon=app/ui/assets/PdfTool.icns "$VOL" "$IMAGE"; then
   echo "dmgbuild: ok"
 else
   echo "dmgbuild не сработал — делаю простой dmg через hdiutil"
-  STAGE="$(mktemp -d)"
-  cp -R "$APP" "$STAGE/"
-  ln -s /Applications "$STAGE/Программы"
-  hdiutil create -volname "$VOL" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$OUT"
-  rm -rf "$STAGE"
+  mkdir "$STAGE/contents"
+  ditto "$APP" "$STAGE/contents/PdfTool.app"
+  ln -s /Applications "$STAGE/contents/Программы"
+  hdiutil create -volname "$VOL" -srcfolder "$STAGE/contents" -fs HFS+ -format UDZO -ov "$IMAGE"
 fi
-hdiutil verify "$OUT"
+hdiutil verify "$IMAGE"
+mv -f "$IMAGE" "$OUT"
 ls -la "$OUT"

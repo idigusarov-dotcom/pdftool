@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import os
 import traceback
+import weakref
 
 from PySide6.QtCore import QObject, QRunnable, QSettings, QThreadPool, Signal
 from PySide6.QtGui import QUndoCommand, QUndoStack
@@ -36,13 +37,14 @@ def last_dir() -> str:
 
 def remember_dir(path: str):
     if path:
-        settings().setValue("last_dir", os.path.dirname(path) if os.path.isfile(path) else path)
+        settings().setValue("last_dir", path if os.path.isdir(path) else os.path.dirname(os.path.abspath(path)))
 
 
 class _Snap(QUndoCommand):
     def __init__(self, owner, before, after, text):
         super().__init__(text)
-        self.owner, self.before, self.after = owner, before, after
+        self.owner = weakref.proxy(owner)
+        self.before, self.after = before, after
         self._first = True
 
     def redo(self):
@@ -59,7 +61,7 @@ class UndoMixin:
     """Вкладка реализует get_state()/set_state(); после правки вызывает self.commit("что сделано")."""
 
     def init_undo(self):
-        self.undo_stack = QUndoStack()
+        self.undo_stack = QUndoStack(self)
         self._last_state = None
         self._restoring = False
 

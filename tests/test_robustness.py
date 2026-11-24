@@ -225,3 +225,20 @@ def test_selftest_passes(tmp_path, monkeypatch):
     assert selftest.run(str(tmp_path)) == 0, open(tmp_path / "selftest.json", encoding="utf-8").read()
     rep = json.load(open(tmp_path / "selftest.json", encoding="utf-8"))
     assert rep["ok"] and os.path.exists(tmp_path / "selftest_window.png")
+
+
+def test_page_links_survive_edit_sort_and_split(tmp_path):
+    src = str(tmp_path / "source.pdf")
+    with pymupdf.open() as doc:
+        for _ in range(3):
+            doc.new_page()
+        doc[0].insert_link({"kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(5, 5, 25, 25), "page": 2})
+        doc.save(src)
+    edited = str(tmp_path / "edited.pdf")
+    pages.rebuild(src, [2, 0], {}, edited)
+    ordered = str(tmp_path / "sorted.pdf")
+    sorting.export_sorted(src, ["2", "3", "1"], ordered)
+    part, = pages.split(src, [[2, 1, 0]], str(tmp_path))
+    for path, link_page in [(edited, 1), (ordered, 1), (part, 2)]:
+        with pymupdf.open(path) as doc:
+            assert [link["page"] for link in doc[link_page].get_links()] == [0]
