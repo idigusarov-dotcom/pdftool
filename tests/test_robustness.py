@@ -242,3 +242,29 @@ def test_page_links_survive_edit_sort_and_split(tmp_path):
     for path, link_page in [(edited, 1), (ordered, 1), (part, 2)]:
         with pymupdf.open(path) as doc:
             assert [link["page"] for link in doc[link_page].get_links()] == [0]
+
+
+def test_startup_with_unusable_log_and_templates(tmp_path, monkeypatch):
+    import logging
+    from app.core import logsetup, templates
+
+    profile = tmp_path / "профиль"
+    profile.mkdir()
+    (profile / "log.txt").mkdir()
+    (profile / "templates").write_text("занято", encoding="utf-8")
+    monkeypatch.delenv("PDFTOOL_TEMPLATES", raising=False)
+    monkeypatch.setattr(logsetup, "data_dir", lambda: str(profile))
+    monkeypatch.setattr(logsetup, "log", logging.Logger("isolated"))
+    monkeypatch.setattr(logsetup.tempfile, "tempdir", str(tmp_path))
+    try:
+        path = logsetup.setup_logging()
+        logsetup.log.info("Проверка первого запуска")
+        assert path == logsetup.setup_logging()
+        assert os.path.dirname(path) == logsetup.log_dir() != str(profile)
+        with open(path, encoding="utf-8") as stream:
+            assert "Проверка первого запуска" in stream.read()
+        assert templates.load_all() == []
+        assert (profile / "templates").is_file()
+    finally:
+        for handler in logsetup.log.handlers:
+            handler.close()

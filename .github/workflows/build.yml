@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main]
+    branches: [main, ci/installer-validation]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -46,7 +46,25 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           PDFTOOL_E2E_SHOTS: e2e-shots
-        run: python -m pytest -q -rs tests
+        id: windows_tests
+        run: python -m pytest -q -rs --junitxml=windows-tests.xml tests
+      - name: Причины ошибок тестов Windows
+        if: failure() && steps.windows_tests.outcome == 'failure'
+        shell: python
+        run: |
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          result = Path("windows-tests.xml")
+          if result.exists():
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+                  for case in ET.parse(result).iter("testcase"):
+                      for issue in list(case):
+                          if issue.tag in ("error", "failure"):
+                              test = f"{case.get('classname')}.{case.get('name')}"
+                              print(f"::error::{test}")
+                              print(f"**{test}**", file=out)
+                              print("\n```text", issue.text, "```\n", sep="\n", file=out)
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -61,7 +79,9 @@ jobs:
         run: |
           $out = Join-Path $env:RUNNER_TEMP "Самопроверка PdfTool"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
-          $p = Start-Process -FilePath "dist\PdfTool.exe" -ArgumentList @("--self-test", "`"$out`"") -PassThru -Wait
+          $exe = Join-Path $out "PdfTool.exe"
+          Copy-Item -LiteralPath "dist\PdfTool.exe" -Destination $exe
+          $p = Start-Process -WorkingDirectory $out -FilePath $exe -ArgumentList @("--self-test", "`"$out`"") -PassThru -Wait
           Write-Host "exit code: $($p.ExitCode)"
           $json = Join-Path $out "selftest.json"
           if (Test-Path $json) { Get-Content $json -Encoding utf8 } else { Write-Host "selftest.json не создан" }
@@ -69,7 +89,7 @@ jobs:
           Copy-Item (Join-Path $out "selftest*") smoke -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) { throw "Самопроверка exe не прошла (код $($p.ExitCode))" }
           $r = Get-Content $json -Raw -Encoding utf8 | ConvertFrom-Json
-          if (-not $r.frozen -or -not $r.ok) { throw "selftest.json: frozen=$($r.frozen) ok=$($r.ok)" }
+          if ($r.platform -ne "win32" -or -not $r.frozen -or -not $r.ok) { throw "selftest.json: frozen=$($r.frozen) ok=$($r.ok)" }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

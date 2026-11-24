@@ -137,7 +137,7 @@ def test_edit_with_file_dialogs_and_history_buttons(win, tmp_path):
         QTest.mouseRelease(pages.dz, Qt.LeftButton, pos=QPoint(-4, -4))
         QTimer.singleShot(100, lambda: choose(pdf))
         QTest.keyClick(pages.dz, Qt.Key_Return)
-        assert pages.path == pdf and not win.btn_undo.isEnabled()
+        assert os.path.samefile(pages.path, pdf) and not win.btn_undo.isEnabled()
         first = pages.grid.visualItemRect(pages.grid.item(0)).center()
         QTest.mouseClick(pages.grid.viewport(), Qt.LeftButton, pos=first)
         QTest.mouseClick(pages.btn_rot, Qt.LeftButton)

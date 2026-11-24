@@ -28,8 +28,8 @@ VERSION = 1
 def templates_dir() -> str:
     d = os.environ.get("PDFTOOL_TEMPLATES")
     if not d:
-        from .logsetup import log_dir
-        d = os.path.join(log_dir(), "templates")
+        from .logsetup import data_dir
+        d = os.path.join(data_dir(), "templates")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -99,10 +99,17 @@ def save(t: Template) -> str:
 
 def load_all() -> list[Template]:
     out = []
-    for fn in sorted(os.listdir(templates_dir())):
+    try:
+        folder = templates_dir()
+        names = sorted(os.listdir(folder))
+    except OSError:
+        from .logsetup import log
+        log.exception("Не удалось открыть папку шаблонов")
+        return []
+    for fn in names:
         if fn.endswith(".json"):
             try:
-                with open(os.path.join(templates_dir(), fn), encoding="utf-8") as f:
+                with open(os.path.join(folder, fn), encoding="utf-8") as f:
                     out.append(Template.from_dict(json.load(f)))
             except Exception:  # noqa: BLE001 — битый файл не должен ронять программу
                 from .logsetup import log

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDia
                                QRadioButton, QScrollArea, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from . import APP_NAME, __version__
-from .core.logsetup import log, log_dir, setup_logging
+from .core.logsetup import data_dir, log, log_dir, log_file, setup_logging
 from .ui import style
 from .ui.chrome import Collapsible, DropZone, Toast, pdf_paths
 from .ui.helppage import HelpPage
@@ -568,7 +568,7 @@ class MainWindow(QMainWindow):
 
     def about(self):
         QMessageBox.about(self, "О программе", f"{APP_NAME}\nВерсия {__version__}\n\n"
-                          f"Журнал ошибок и шаблоны: {log_dir()}\n\n"
+                          f"Журнал: {log_file() or 'недоступен'}\nПапка данных: {data_dir()}\n\n"
                           "Шрифт Inter (SIL OFL 1.1), иконки Lucide (ISC).")
 
     def closeEvent(self, e):
@@ -608,10 +608,11 @@ def install_excepthook():
         text = "".join(traceback.format_exception(etype, value, tb))
         log.error("Необработанная ошибка:\n%s", text)
         try:
+            path = log_file()
+            details = f"\n\nЖурнал ошибок: {path}" if path else ""
             QMessageBox.critical(None, "Ошибка",
                                  "Что-то пошло не так, но ваши файлы не изменены.\n\n"
-                                 f"Причина: {value}\n\nПодробности записаны в журнал:\n"
-                                 f"{os.path.join(log_dir(), 'log.txt')}\n(меню «Справка» → «Открыть папку с логами»)")
+                                 f"Причина: {value}{details}")
         except Exception:  # noqa: BLE001
             pass
     sys.excepthook = hook
