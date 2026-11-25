@@ -292,7 +292,10 @@ def test_theme_settings_persist_and_tour(win, tmp_path):
             pump(app, 0.02)
             n += 1
         assert win.tour is None, f"подсказка на {type(scr).__name__} не закончилась"
-        assert n == len([s for s in scr.tour_steps() if s.target is None or s.target.window() is win])
+        expected = [s for s in scr.tour_steps() if s.target is None or s.target.window() is win]
+        if scr in (win.pages, win.text):
+            expected = [s for s in expected if s.target is None or s.target.isVisibleTo(scr)]
+        assert n == len(expected)
 
 
 def test_drag_and_drop_and_open_files_route_to_screen(win, fake, tmp_path):

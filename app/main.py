@@ -229,7 +229,10 @@ class MainWindow(QMainWindow):
             b.setAccessibleName(label)     # в узком окне текста нет — имя для экранного диктора и UI Automation
             self._nav_labels[key] = label
             b.setCursor(Qt.PointingHandCursor)
-            b.clicked.connect(lambda _=False, k=i: self.tabs.setCurrentIndex(k))
+            if key == "text":
+                b.clicked.connect(self.show_text_editor)
+            else:
+                b.clicked.connect(lambda _=False, k=i: self.tabs.setCurrentIndex(k))
             grp.addButton(b)
             v.addWidget(b)
             self.nav[key] = b
@@ -264,12 +267,9 @@ class MainWindow(QMainWindow):
 
     def _save_current(self):
         tab = self.current()
-        if tab is self.pages:
-            focus = QApplication.focusWidget()
-            in_merge = focus is not None and self.pages.card_merge.isAncestorOf(focus)
-            if in_merge or not self.pages.btn_save.isEnabled():
-                self.pages.btn_merge.click()
-                return
+        if tab is self.pages and self.pages.modes.currentIndex() == 1:
+            self.pages.btn_merge.click()
+            return
         button = getattr(tab, "btn_save", None)
         if button is not None:
             button.click()
@@ -404,6 +404,8 @@ class MainWindow(QMainWindow):
         w = self.current()
         opened = {c: c.is_expanded() for c in w.findChildren(Collapsible)}
         steps = [st for st in w.tour_steps() if st.target is None or st.target.window() is self]
+        if w in (self.pages, self.text):
+            steps = [st for st in steps if st.target is None or st.target.isVisibleTo(w)]
         self.tour = TourOverlay(self.centralWidget(), steps, SCREENS[self.tabs.currentIndex()][0])
         def done():
             self.tour = None
@@ -560,7 +562,11 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(self, "Открыть", last_dir(), "PDF и картинки (*.pdf *.png *.jpg *.jpeg)")
         if paths:
             remember_dir(paths[0])
-            self.open_files(paths)
+            if self.current() is self.pages and self.pages.modes.currentIndex() == 1 and all(
+                    path.lower().endswith(".pdf") for path in paths):
+                self.pages.add_files(paths)
+            else:
+                self.open_files(paths)
 
     def open_files(self, paths: list[str]):
         """Файлы, открытые через систему (перетащили на значок в Dock, «Открыть с помощью»)."""
@@ -576,6 +582,13 @@ class MainWindow(QMainWindow):
             w = self.pages            # со «Справки» — просто открыть PDF на «Страницах»
         self.show_screen(w)
         w.accept_files(paths)
+
+    def show_text_editor(self):
+        if (self.current() is self.pages and self.pages.modes.currentIndex() == 0
+                and self.pages.grid.count() and self.text.doc is None):
+            self.pages.open_text()
+        else:
+            self.show_screen(self.text)
 
     def edit_document(self, path, page, layout=None):
         if self.text.open(path, page, layout):

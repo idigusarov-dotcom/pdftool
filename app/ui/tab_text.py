@@ -6,7 +6,7 @@ import re
 
 import pymupdf as pdf
 from PySide6.QtCore import QEvent, QRectF, QSignalBlocker, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPen, QShortcut
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDialog, QDialogButtonBox,
                                QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressDialog,
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox, QDialog, QDia
 
 from ..core import textedit as editor
 from ..core.pdfutil import Cancelled, PdfError, human_error, safe_output_path
-from .chrome import DropZone, ScreenHeader
+from .chrome import DropZone, FileStartPanel, ScreenHeader
 from .infra import UndoMixin
 from .thumbs import page_pixmap, visible_rows
 from .tour import Step
@@ -122,7 +122,7 @@ class EditDialog(QDialog):
         self.tab, self.target = tab, target
         mode = tab.mode.currentData()
         self.setWindowTitle(MODES[mode][0])
-        self.resize(440, 300)
+        self.resize(500, 360)
         layout = QVBoxLayout(self)
         form = QFormLayout()
         layout.addLayout(form)
@@ -182,7 +182,8 @@ class EditDialog(QDialog):
             self.initial_size = self.size.value()
             self.size.setSuffix(" пт")
             form.addRow("Размер", self.size)
-            self.color_button = QPushButton(self.color.name())
+            self.color_button = QPushButton()
+            self.update_color()
             self.color_button.clicked.connect(self.choose_color)
             form.addRow("Цвет", self.color_button)
             self.align = QComboBox()
@@ -201,7 +202,11 @@ class EditDialog(QDialog):
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("Применить")
+        apply_button = buttons.button(QDialogButtonBox.Ok)
+        apply_button.setText("Применить")
+        apply_button.setProperty("kind", "primary")
+        apply_button.setDefault(True)
+        buttons.button(QDialogButtonBox.Cancel).setText("Отмена")
         buttons.accepted.connect(self.submit)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -234,11 +239,19 @@ class EditDialog(QDialog):
         except PdfError as exc:
             self.font_hint.setText(str(exc))
 
+    def update_color(self):
+        chip = QPixmap(18, 18)
+        chip.fill(self.color)
+        self.color_button.setIcon(QIcon(chip))
+        self.color_button.setText(self.color.name())
+        self.color_button.setAccessibleName(f"Выбрать цвет текста, текущий цвет {self.color.name()}")
+        self.color_button.setToolTip("Выбрать цвет текста")
+
     def choose_color(self):
         color = QColorDialog.getColor(self.color, self, "Цвет текста")
         if color.isValid():
             self.color = color
-            self.color_button.setText(color.name())
+            self.update_color()
 
     def recognize(self):
         try:
@@ -293,6 +306,14 @@ class TextTab(QWidget, UndoMixin):
         self.header = ScreenHeader("Текст", "Редактируйте текст на странице, исправляйте сканы и заполняйте формы.",
                                    ["Откройте PDF", "Внесите правки", "Сохраните копию"])
         layout.addWidget(self.header)
+        self.start = FileStartPanel("Откройте PDF", "Перетащите документ для редактирования текста",
+                                   "Выбрать PDF…", lambda: self.open(ask_open_pdf(self)))
+        self.start.files.connect(self.accept_files)
+        layout.addWidget(self.start, 1)
+        self.editor = QWidget()
+        layout.addWidget(self.editor, 1)
+        layout = QVBoxLayout(self.editor)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.dz = DropZone("Открыть PDF")
         self.dz.files.connect(self.accept_files)
         self.dz.clicked.connect(lambda: self.open(ask_open_pdf(self)))
@@ -432,6 +453,8 @@ class TextTab(QWidget, UndoMixin):
 
     def update_mode(self):
         ready = self.doc is not None
+        self.editor.setVisible(ready)
+        self.start.setVisible(not ready)
         for widget in (self.mode, self.query, self.btn_search, self.btn_save, self.page_num):
             widget.setEnabled(ready)
         key = self.mode.currentData()
@@ -462,7 +485,7 @@ class TextTab(QWidget, UndoMixin):
         self.view.outline()
 
     def eventFilter(self, obj, event):
-        if obj is self.thumbs.viewport() and event.type() in (QEvent.Show, QEvent.Resize):
+        if event.type() in (QEvent.Show, QEvent.Resize):
             self.thumb_timer.start()
         return super().eventFilter(obj, event)
 
@@ -578,6 +601,8 @@ class TextTab(QWidget, UndoMixin):
             dlg.accept()
             self.page_num.setValue(selected[0][0] + 1)
 
+        actions.addWidget(big_button("Закрыть", dlg.reject))
+        actions.addStretch()
         actions.addWidget(big_button("Перейти к строке", jump))
         actions.addWidget(big_button("Заменить отмеченные", replace, primary=True))
         rows.itemDoubleClicked.connect(lambda *_: jump())
@@ -592,7 +617,8 @@ class TextTab(QWidget, UndoMixin):
         return 1
 
     def tour_steps(self):
-        return [Step(self.dz, "Открыть PDF", "Выберите документ или перетащите его сюда."),
+        return [Step(self.start.button, "Выбрать файл", "Откройте PDF для редактирования текста или скана."),
+                Step(self.dz, "Открыть PDF", "Выберите документ или перетащите его сюда."),
                 Step(self.mode, "Выбрать инструмент", "Щёлкните строку или поле формы. Для абзаца и скана обведите область."),
                 Step(self.thumbs, "Страницы", "Выберите страницу по миниатюре или введите её номер внизу."),
                 Step(self.view, "Проверить правку", "После применения правка видна на странице. Кнопка отмены вернёт предыдущий вариант."),

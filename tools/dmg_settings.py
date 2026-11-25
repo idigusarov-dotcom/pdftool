@@ -5,8 +5,8 @@ import os
 app = defines.get("app", "dist/PdfTool.app")  # noqa: F821 — переменную defines подставляет dmgbuild
 files = [app]
 symlinks = {"Программы": "/Applications"}
-icon_locations = {os.path.basename(app): (150, 185), "Программы": (450, 185)}
-background = "builtin-arrow"
+icon_locations = {os.path.basename(app): (150, 200), "Программы": (450, 200)}
+background = defines.get("background", "builtin-arrow")  # noqa: F821
 window_rect = ((200, 160), (600, 380))
 default_view = "icon-view"
 show_status_bar = False

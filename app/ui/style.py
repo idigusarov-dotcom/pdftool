@@ -1,5 +1,5 @@
 """Оформление в духе Apple HIG: системный шрифт (SF Pro на Mac, Segoe UI на Windows, Inter — запасной),
-системный синий акцент, светлая/тёмная тема по настройке системы, скруглённые карточки. Иконки Lucide (ISC).
+бирюзовый акцент, светлая/тёмная тема по настройке системы, скруглённые карточки. Иконки Lucide (ISC).
 
 Размеры шрифтов в QSS заданы в пикселях: на macOS 1pt = 1px (72 dpi), на Windows 1pt = 1.33px,
 поэтому «10pt» выглядел бы на Mac мелким. Пиксели одинаковы на обеих системах.
@@ -24,16 +24,16 @@ def asset(*parts: str) -> str:
 
 
 # Цвета близки к системным цветам macOS (systemBlue, labelColor, separatorColor …), но свои значения.
-LIGHT = dict(bg="#f8f9fb", surface="#ffffff", surface2="#eff2f6", border="#e3e3e8", border_strong="#d2d2d7",
-             text="#1d1d1f", muted="#565f6c", primary="#1264be", primary_hover="#0a529f", accent="#1264be", accent_hover="#0066d6", accent_soft="#e6f0ff",
-             success="#28a745", success_soft="#e8f6ec", warn="#c76a00", warn_soft="#fff3e0",
-             danger="#e5372b", danger_soft="#fdeceb", sidebar="#edf0f5", sel="#e6f0ff", sel_text="#1d1d1f",
-             fill="rgba(0,0,0,0.055)", fill_hover="rgba(0,0,0,0.09)", page="#ececf0",
+LIGHT = dict(bg="#f5f7f8", surface="#ffffff", surface2="#eff2f6", border="#dbe2e3", border_strong="#becbcc",
+             text="#143138", muted="#50636a", primary="#006e70", primary_hover="#00595c", accent="#006e70", accent_hover="#005b60", accent_soft="#cfefe7",
+             success="#19724c", success_soft="#e8f6ec", warn="#c76a00", warn_soft="#fff3e0",
+             danger="#e5372b", danger_soft="#fdeceb", sidebar="#edf2f2", sel="#cfefe7", sel_text="#143138",
+             fill="rgba(0,0,0,0.055)", fill_hover="rgba(0,0,0,0.09)", page="#e9eeee",
              dim="rgba(15,20,35,150)")
-DARK = dict(bg="#1e1e20", surface="#2a2a2d", surface2="#323236", border="#3a3a3e", border_strong="#4a4a4f",
-            text="#f5f5f7", muted="#b0b6c1", primary="#1765bc", primary_hover="#236dbd", accent="#74b9ff", accent_hover="#409cff", accent_soft="#1c3556",
+DARK = dict(bg="#162124", surface="#202d30", surface2="#29383b", border="#36464a", border_strong="#506267",
+            text="#f5f5f7", muted="#b0b6c1", primary="#116f70", primary_hover="#147778", accent="#88e3d4", accent_hover="#abeee3", accent_soft="#25474a",
             success="#30d158", success_soft="#1d3326", warn="#ff9f0a", warn_soft="#3a2e1a",
-            danger="#ff453a", danger_soft="#3d2224", sidebar="#262628", sel="#1c3556", sel_text="#f5f5f7",
+            danger="#ff453a", danger_soft="#3d2224", sidebar="#1b292c", sel="#25474a", sel_text="#f5f5f7",
             fill="rgba(255,255,255,0.08)", fill_hover="rgba(255,255,255,0.13)", page="#18181a",
             dim="rgba(0,0,0,170)")
 
@@ -162,8 +162,17 @@ QToolTip {{ background: {c['surface']}; color: {c['text']}; border: 1px solid {c
 #Sidebar QPushButton:checked {{ background: {c['accent_soft']}; color: {c['accent']}; font-weight: 600; }}
 #Sidebar[compact="true"] QPushButton {{ text-align: center; padding: 8px 0; }}
 #SideSection {{ color: {c['muted']}; font-size: 12px; font-weight: 600; padding: 10px 10px 2px 10px; }}
-#ScreenTitle {{ font-size: 24px; font-weight: 700; }}
+#ScreenTitle {{ font-size: 28px; font-weight: 700; }}
 #ScreenSub {{ color: {c['muted']}; font-size: 14px; }}
+#FileStart {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 14px; }}
+#FileStart[hover="true"] {{ border: 2px solid {c['accent']}; background: {c['accent_soft']}; }}
+#StartTitle {{ font-size: 26px; font-weight: 700; }}
+QTabBar::tab {{ padding: 7px 20px; background: {c['surface']}; color: {c['text']};
+    border: 1px solid {c['border_strong']}; }}
+QTabBar::tab:first {{ border-top-left-radius: 7px; border-bottom-left-radius: 7px; }}
+QTabBar::tab:last {{ border-top-right-radius: 7px; border-bottom-right-radius: 7px; }}
+QTabBar::tab:selected {{ background: {c['primary']}; color: white; border-color: {c['primary']}; }}
+QTabBar::tab:!selected:hover {{ background: {c['accent_soft']}; }}
 #Card, QGroupBox {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 12px; }}
 QGroupBox {{ margin-top: 0px; padding: 30px 10px 10px 10px; font-weight: 600; }}
 QGroupBox::title {{ subcontrol-origin: border; subcontrol-position: top left; left: 12px; top: 9px;
@@ -184,23 +193,23 @@ QToolButton:pressed {{ background: {c['fill_hover']}; }}
 QToolButton::menu-indicator {{ image: none; width: 0; }}
 QToolButton#HelpButton {{ color: {c['accent']}; font-weight: 600; padding: 5px 10px; }}
 QToolButton#HelpButton:hover {{ background: {c['accent_soft']}; }}
-QLineEdit, QSpinBox, QComboBox {{ background: {c['surface']}; border: 1px solid {c['border_strong']};
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{ background: {c['surface']}; border: 1px solid {c['border_strong']};
     border-radius: 7px; padding: 4px 8px; min-height: 20px; selection-background-color: {c['primary']}; }}
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{ border: 1px solid {c['accent']}; }}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus, QComboBox:focus {{ border: 1px solid {c['accent']}; }}
 QComboBox {{ padding-right: 22px; }}
 QComboBox::drop-down {{ border: none; width: 22px; subcontrol-origin: padding; subcontrol-position: center right; }}
 QComboBox::down-arrow {{ image: url("{down}"); width: 12px; height: 12px; }}
-QSpinBox {{ padding-right: 20px; }}
-QSpinBox::up-button, QSpinBox::down-button {{ border: none; background: transparent; width: 18px;
+QSpinBox, QDoubleSpinBox {{ padding-right: 20px; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::down-button {{ border: none; background: transparent; width: 18px;
     subcontrol-origin: border; }}
-QSpinBox::up-button {{ subcontrol-position: top right; margin: 3px 2px 0 0; }}
-QSpinBox::down-button {{ subcontrol-position: bottom right; margin: 0 2px 3px 0; }}
-QSpinBox::up-button:hover, QSpinBox::down-button:hover {{ background: {c['fill']}; border-radius: 4px; }}
-QSpinBox::up-arrow {{ image: url("{up}"); width: 10px; height: 10px; }}
-QSpinBox::down-arrow {{ image: url("{down}"); width: 10px; height: 10px; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{ subcontrol-position: top right; margin: 3px 2px 0 0; }}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{ subcontrol-position: bottom right; margin: 0 2px 3px 0; }}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover, QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{ background: {c['fill']}; border-radius: 4px; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image: url("{up}"); width: 10px; height: 10px; }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url("{down}"); width: 10px; height: 10px; }}
 QComboBox QAbstractItemView {{ background: {c['surface']}; border: 1px solid {c['border_strong']};
     border-radius: 8px; padding: 4px; selection-background-color: {c['primary']}; selection-color: white; }}
-QTableWidget, QListWidget, QTextBrowser, QTextEdit {{ background: {c['surface']}; border: 1px solid {c['border']};
+QTableWidget, QListWidget, QTextBrowser, QTextEdit, QPlainTextEdit {{ background: {c['surface']}; border: 1px solid {c['border']};
     border-radius: 10px; gridline-color: {c['border']}; selection-background-color: {c['sel']};
     selection-color: {c['sel_text']}; alternate-background-color: {c['surface2']}; }}
 #PageThumbnails::item {{ border: 1px solid transparent; border-radius: 6px; }}
@@ -247,7 +256,7 @@ QMenu::separator {{ height: 1px; background: {c['border']}; margin: 4px 8px; }}
     font-weight: 600; font-size: 12px; qproperty-alignment: AlignCenter; background: {c['fill_hover']};
     color: {c['muted']}; }}
 #Step[state="active"] #StepNum {{ background: {c['primary']}; color: white; }}
-#Step[state="done"] #StepNum {{ background: {c['success']}; color: white; }}
+#Step[state="done"] #StepNum {{ background: {c['success']}; color: {c['bg'] if is_dark() else "white"}; }}
 #StepText {{ color: {c['muted']}; }}
 #Step[state="active"] #StepText {{ color: {c['text']}; font-weight: 600; }}
 #Step[state="done"] #StepText {{ color: {c['text']}; }}
@@ -304,7 +313,7 @@ def apply_theme(app, dark: bool = False):
 
 
 # цвета пометок в таблицах (светлая / тёмная тема)
-_MARKS = {"white": ("#ffffff", "#2a2a2d"), "#ffe082": ("#ffe9a8", "#5a4a17"), "#eeeeee": ("#f0f0f2", "#333336"),
+_MARKS = {"white": ("#ffffff", "#202d30"), "#ffe082": ("#ffe9a8", "#5a4a17"), "#eeeeee": ("#f0f0f2", "#333336"),
           "#fff8e1": ("#fff8e1", "#3a3420"), "#ffcdd2": ("#ffd6d3", "#5a2a2e"), "#ffcc80": ("#ffd9a0", "#5e4220"),
           "#c8e6c9": ("#d3f0d8", "#1f4a2c")}
 
