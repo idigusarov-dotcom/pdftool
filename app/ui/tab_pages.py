@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QSignalBlocker, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QItemSelectionModel, QSignalBlocker, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon, QKeySequence, QPixmap, QShortcut, QTransform
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QVBoxLayout, QWidget)
@@ -19,6 +19,8 @@ from .widgets import try_open_pdf, open_folder, ask_open_pdf, ask_save, big_butt
 
 
 class PagesTab(QWidget, UndoMixin):
+    edit_text = Signal(str, int, object)
+
     def __init__(self):
         super().__init__()
         self.init_undo()
@@ -102,6 +104,9 @@ class PagesTab(QWidget, UndoMixin):
                                       tip="Открыть страницу крупно (Enter или двойной щелчок)")
         self.btn_extract = big_button("Извлечь…", lambda: self.save(selected_only=True), icon_name="download",
                                       tip="Сохранить выделенные страницы в один PDF с текущими поворотами")
+        self.btn_text = big_button("Текст", self.open_text, icon_name="pencil",
+                                   tip="Редактировать текст с текущим порядком и поворотами страниц")
+        selection.addWidget(self.btn_text)
         selection.addWidget(self.btn_preview)
         selection.addWidget(self.btn_extract)
         v2.addLayout(selection)
@@ -146,6 +151,15 @@ class PagesTab(QWidget, UndoMixin):
         self._update_merge_actions()
         self.reset_undo()
 
+    def open_text(self):
+        item = self.grid.currentItem() or self.grid.item(0)
+        if item is not None:
+            order, rotations = self.state()
+            layout = tuple((i, rotations[i]) for i in order)
+            if order == list(range(len(self.doc))) and not any(rotations.values()):
+                layout = None
+            self.edit_text.emit(self.path, self.grid.row(item), layout)
+
     def _update_split_action(self):
         self.btn_split.setEnabled(self.doc is not None and bool(self.ed_ranges.text().strip()))
 
@@ -155,6 +169,7 @@ class PagesTab(QWidget, UndoMixin):
         self.selection_count.setText(f"Выбрано {selected} из {total}" if total else "Страниц нет")
         self.btn_save.setEnabled(total > 0)
         self.btn_preview.setEnabled(total > 0)
+        self.btn_text.setEnabled(total > 0)
         for button in (self.btn_rot, self.btn_left, self.btn_del, self.btn_extract):
             button.setEnabled(selected > 0)
         self.ed_ranges.setEnabled(self.doc is not None)

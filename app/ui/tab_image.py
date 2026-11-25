@@ -32,7 +32,7 @@ class ImageTab(QWidget, UndoMixin):
         lay.setContentsMargins(24, 18, 24, 16)
         lay.setSpacing(12)
         self.header = ScreenHeader("Вставка картинки",
-                                   "Печать, подпись или логотип ставится на нужные страницы PDF.",
+                                   "Добавьте фотографию, рисунок или логотип на выбранные страницы PDF.",
                                    ["Откройте PDF и картинку", "Поставьте картинку на место", "Сохраните новый PDF"])
         lay.addWidget(self.header)
         top = QHBoxLayout()
@@ -40,7 +40,7 @@ class ImageTab(QWidget, UndoMixin):
         self.dz_pdf = DropZone("PDF", "Перетащите сюда PDF или нажмите")
         self.dz_pdf.clicked.connect(self.open_pdf)
         self.dz_pdf.files.connect(lambda ps: self.open_pdf(ps[0]))
-        self.dz_img = DropZone("Картинка", "Перетащите PNG/JPG (печать, подпись) или нажмите",
+        self.dz_img = DropZone("Картинка", "Перетащите PNG или JPEG сюда или нажмите",
                                exts=(".png", ".jpg", ".jpeg"), icon_name="image")
         self.dz_img.clicked.connect(self.open_image)
         self.dz_img.files.connect(lambda ps: self.open_image(ps[0]))
@@ -49,7 +49,7 @@ class ImageTab(QWidget, UndoMixin):
         lay.addLayout(top)
         opts = QHBoxLayout()
         self.chk_white = QCheckBox("Убрать белый фон")
-        self.chk_white.setToolTip("Сделать белый фон картинки прозрачным — как настоящая печать на бумаге")
+        self.chk_white.setToolTip("Сделать белые участки изображения прозрачными")
         self.chk_white.toggled.connect(self.white_toggled)
         opts.addWidget(self.chk_white)
         opts.addSpacing(20)
@@ -108,10 +108,10 @@ class ImageTab(QWidget, UndoMixin):
     def tour_steps(self):
         from .tour import Step
         return [
-            Step(None, "Вставка картинки", "Здесь можно поставить печать, подпись или логотип на страницы PDF. "
+            Step(None, "Вставка картинки", "Добавьте изображение на одну или несколько страниц PDF. "
                  "Нажимайте «Далее»."),
             Step(self.dz_pdf, "1. Откройте PDF", "Нажмите или перетащите сюда документ."),
-            Step(self.dz_img, "…и картинку", "PNG или JPG. Лучше всего — скан печати на белом фоне."),
+            Step(self.dz_img, "…и картинку", "Выберите фотографию или рисунок в формате PNG или JPEG."),
             Step(self.chk_white, "Убрать белый фон", "Отметьте, чтобы белый фон картинки стал прозрачным и не "
                  "закрывал текст документа."),
             Step(self.view, "2. Поставьте на место", "Перетащите картинку мышью. Размер — за синий квадратик "

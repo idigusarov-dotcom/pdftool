@@ -15,6 +15,7 @@ a = Analysis(
     pathex=["."],
     hiddenimports=["pymupdf", "PySide6.QtSvg"],
     datas=[("app/core/models/digits_cnn.npz", "app/core/models"),
+           ("app/core/models/tessdata", "app/core/models/tessdata"),
            ("app/ui/assets/fonts", "app/ui/assets/fonts"),
            ("app/ui/assets/icons", "app/ui/assets/icons")],
     excludes=["tkinter", "matplotlib", "scipy", "pandas", "PySide6.QtNetwork", "PySide6.QtQml",

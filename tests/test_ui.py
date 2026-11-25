@@ -39,7 +39,7 @@ def win(monkeypatch):
 @pytest.mark.skipif(not os.path.exists(JOB4), reason="нет job4")
 def test_open_89_pages_fast(win):
     t0 = time.perf_counter()
-    win.tabs.setCurrentIndex(1)
+    win.show_screen(win.sort)
     win.sort.open(JOB4)
     app.processEvents()
     dt = time.perf_counter() - t0
@@ -148,7 +148,7 @@ def test_template_bar_and_batch_ui(win, tmp_path):
 
 # ---------- v1.3: интерфейс и пошаговые подсказки ----------
 def _screens(win):
-    return [win.sign, win.batch, win.fragment, win.sort, win.image, win.pages, win.helppage]
+    return [win.sign, win.batch, win.fragment, win.sort, win.image, win.pages, win.text, win.helppage]
 
 
 @pytest.mark.parametrize("size", [(1366, 768), (900, 560)])
@@ -250,6 +250,7 @@ def test_steps_toast_dropzone_theme(win, tmp_path):
     from app.ui import style
     from app.ui.widgets import info
     s = win.sign
+    win.show_screen(s)
     assert s.header.steps.state(0) == "active"
     acts, rec = _sample_pdfs(tmp_path)
     # перетаскивание файлов на зоны
