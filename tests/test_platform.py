@@ -256,6 +256,7 @@ def test_no_horizontal_scroll(win, width, tmp_path):
     win.sort.open(acts)
     win.image.open_pdf(acts)
     win.batch.add_pair(acts, rec)
+    assert win.text.open(acts) and win.text.doc is not None
     win.sign.advanced.set_expanded(True)
     win.sort.advanced.set_expanded(True)
     win.resize(width, 720)
@@ -266,6 +267,15 @@ def test_no_horizontal_scroll(win, width, tmp_path):
         win.tabs.setCurrentIndex(i)
         app.processEvents()
         assert win.tabs.widget(i).horizontalScrollBar().maximum() == 0, type(win.tabs.currentWidget()).__name__
+    # «Текст» с открытым файлом: панель с масштабом, номером страницы и «Сохранить копию» видна без прокрутки.
+    win.show_screen(win.text)
+    app.processEvents()
+    area = win.tabs.widget(win.tabs.currentIndex())
+    assert area.verticalScrollBar().maximum() == 0
+    save = win.text.btn_save
+    bottom = save.mapTo(area.viewport(), save.rect().bottomLeft()).y()
+    assert save.isVisible() and bottom <= area.viewport().height()
+    assert win.text.view.height() >= 200
     for button in (win.fragment.btn_retouch, win.fragment.btn_place):
         assert button.width() >= button.minimumSizeHint().width()
 

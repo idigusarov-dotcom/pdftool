@@ -22,16 +22,35 @@ from .widgets import (PageView, ask_open_pdf, ask_save, big_button, error, info,
                       try_open_pdf, zoom_bar)
 
 MODES = {
-    "line": ("Изменить строку", "Щёлкните по тексту, который хотите изменить."),
+    "line": ("Изменить строку", "Щёлкните по строке, которую хотите изменить. Tab — следующая строка, Enter — править."),
     "add": ("Добавить текст", "Обведите место для новой надписи."),
     "block": ("Заменить абзац", "Обведите строки целиком. Новый текст будет перенесён внутри рамки."),
-    "scan": ("Исправить скан", "Обведите текст на скане. Выбранный участок будет заменён на белом фоне."),
-    "field": ("Заполнить поле", "Щёлкните по полю PDF-формы."),
+    "scan": ("Исправить скан", "Обведите текст на скане. Участок закрасится цветом бумаги вокруг него."),
+    "field": ("Заполнить поле", "Щёлкните по полю PDF-формы. Tab — следующее поле, Enter — заполнить."),
 }
+
+EDIT_KEYS = "Enter — применить, Esc — отмена, Tab — применить и перейти к следующей строке."
+
+
+def same_path(a, b):
+    """Один и тот же файл, даже если путь записан по-разному (C:/x и C:\\X на Windows)."""
+    if not a or not b:
+        return False
+    norm = lambda p: os.path.normcase(os.path.normpath(os.path.abspath(p)))
+    return norm(a) == norm(b)
+
+
+def reading_order(targets):
+    """Строки в порядке чтения: сверху вниз, в строке — слева направо."""
+    def key(t):
+        r = pdf.Rect(t.rect)
+        return round(r.y0 / max(2.0, r.height * 0.6)), r.x0
+    return sorted(targets, key=key)
 
 
 class TextView(PageView):
     picked = Signal(object)
+    missed = Signal()
 
     def __init__(self):
         super().__init__()
@@ -43,6 +62,16 @@ class TextView(PageView):
         self.mode = "line"
         self.start = None
         self.highlight = None
+        self.current = None         # строка, выбранная с клавиатуры
+        self.marks = []
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def sizeHint(self):
+        # Без этого подсказка размера страницы (~334×472) выталкивала нижнюю панель за край окна 720 px.
+        return QSize(480, 260)
+
+    def minimumSizeHint(self):
+        return QSize(200, 160)
 
     def display(self, doc, number):
         page = doc[number]
@@ -53,7 +82,67 @@ class TextView(PageView):
         pen = QPen(QColor("#0879db"), 2)
         pen.setCosmetic(True)
         self.highlight = self.scene().addRect(QRectF(), pen, QColor(44, 143, 239, 34))
+        self.highlight.setZValue(2)
         self.highlight.hide()
+        self.marks = []
+        self.current = None
+
+    def scene_rect(self, rect):
+        box = pdf.Rect(rect) * self.page.rotation_matrix
+        w, h = self._size()
+        sx, sy = w / self.page.rect.width, h / self.page.rect.height
+        return QRectF(box.x0 * sx, box.y0 * sy, box.width * sx, box.height * sy)
+
+    def mark(self, rects):
+        """Подсветка уже изменённых мест текущей страницы."""
+        for item in self.marks:
+            self.scene().removeItem(item)
+        self.marks = []
+        if self.page is None:
+            return
+        pen = QPen(QColor("#1f9d55"), 1.5, Qt.DashLine)
+        pen.setCosmetic(True)
+        for rect in rects:
+            item = self.scene().addRect(self.scene_rect(rect).adjusted(-1, -1, 1, 1), pen, QColor(31, 157, 85, 28))
+            item.setZValue(1)
+            item.setToolTip("Изменено")
+            self.marks.append(item)
+
+    def step(self, delta):
+        """Tab/Shift+Tab: выбрать следующую/предыдущую строку или поле."""
+        order = reading_order(self.targets)
+        if not order:
+            return None
+        if self.current in order:
+            index = (order.index(self.current) + delta) % len(order)
+        else:
+            index = 0 if delta > 0 else len(order) - 1
+        self.current = order[index]
+        self.outline(self.current.rect)
+        self.ensureVisible(self.scene_rect(self.current.rect), 40, 40)
+        return self.current
+
+    def event(self, event):
+        # Tab в QGraphicsView обычно уводит фокус; здесь он переключает строки.
+        if (event.type() == QEvent.KeyPress and self.mode in ("line", "field") and self.targets
+                and event.key() in (Qt.Key_Tab, Qt.Key_Backtab)):
+            self.step(-1 if event.key() == Qt.Key_Backtab or event.modifiers() & Qt.ShiftModifier else 1)
+            return True
+        return super().event(event)
+
+    def keyPressEvent(self, event):
+        if self.mode in ("line", "field") and event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_F2):
+            target = self.current or self.step(1)
+            if target is not None:
+                self.picked.emit(target)
+            event.accept()
+            return
+        if event.key() == Qt.Key_Escape and self.current is not None:
+            self.current = None
+            self.outline()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def point(self, event):
         pos = self.mapToScene(event.position().toPoint())
@@ -67,10 +156,7 @@ class TextView(PageView):
         if rect is None:
             self.highlight.hide()
             return
-        box = pdf.Rect(rect) * self.page.rotation_matrix
-        w, h = self._size()
-        sx, sy = w / self.page.rect.width, h / self.page.rect.height
-        self.highlight.setRect(QRectF(box.x0 * sx, box.y0 * sy, box.width * sx, box.height * sy))
+        self.highlight.setRect(self.scene_rect(rect))
         self.highlight.show()
 
     def hit(self, point):
@@ -87,6 +173,8 @@ class TextView(PageView):
                 self.outline(self.region(p))
             else:
                 target = self.hit(p)
+                if target is None and self.current is not None:
+                    target = self.current
                 self.outline(target.rect if target else None)
         super().mouseMoveEvent(event)
 
@@ -95,9 +183,13 @@ class TextView(PageView):
             p = self.point(event)
             if p in editor.bounds(self.page):
                 if self.mode in ("line", "field"):
+                    self.setFocus()
                     target = self.hit(p)
                     if target:
+                        self.current = target
                         self.picked.emit(target)
+                    else:
+                        self.missed.emit()
                 else:
                     self.start = p
                 event.accept()
@@ -130,11 +222,14 @@ class EditDialog(QDialog):
         self.choice = None
         self.checkbox = None
         self.custom_fonts = {}
+        self.advance = 0            # после «Применить»: 1 — следующая строка, -1 — предыдущая
         self.original_value = None
         self.color = QColor.fromRgb(0xff000000 | target.color)
         if mode == "field":
-            field = next(w for w in tab.view.page.widgets() if w.field_name == target.text and
-                         w.rect == pdf.Rect(target.rect))
+            field = next((w for w in tab.view.page.widgets() if w.field_name == target.text and
+                          w.rect == pdf.Rect(target.rect)), None)
+            if field is None:
+                raise PdfError("Поле больше не найдено на странице. Обновите страницу и выберите его снова.")
             if field.field_flags & pdf.PDF_FIELD_IS_READ_ONLY:
                 raise PdfError("Поле доступно только для чтения.")
             if field.field_type == pdf.PDF_WIDGET_TYPE_TEXT:
@@ -162,6 +257,14 @@ class EditDialog(QDialog):
             self.original_value = value
             self.input.setPlainText(value)
             form.addRow("Текст", self.input)
+            if mode == "line":
+                # Одна строка: компактное поле, Enter применяет, Tab — к следующей строке.
+                metrics = self.input.fontMetrics()
+                self.input.setFixedHeight(metrics.lineSpacing() * 2 + 14)
+                self.input.setTabChangesFocus(False)
+                self.input.installEventFilter(self)
+                self.input.moveCursor(self.input.textCursor().MoveOperation.End)
+                self.resize(520, 300)
             if mode == "scan":
                 form.addRow(big_button("Распознать русский и английский текст", self.recognize))
             self.font = QComboBox()
@@ -198,6 +301,17 @@ class EditDialog(QDialog):
             self.font.currentIndexChanged.connect(self.show_font)
             self.input.textChanged.connect(self.show_font)
             self.show_font()
+        if mode in ("line", "field") and self.checkbox is None:
+            keys = QLabel(EDIT_KEYS)
+            keys.setWordWrap(True)
+            keys.setProperty("role", "hint")
+            layout.addWidget(keys)
+            if mode == "field":
+                self.input.installEventFilter(self)
+            if self.choice is not None:
+                self.choice.installEventFilter(self)
+        if self.checkbox is not None:
+            self.checkbox.installEventFilter(self)
         self.message = QLabel()
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
@@ -210,6 +324,21 @@ class EditDialog(QDialog):
         buttons.accepted.connect(self.submit)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress:
+            key = event.key()
+            if key in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers() & Qt.ShiftModifier:
+                self.submit()
+                return True
+            if key in (Qt.Key_Tab, Qt.Key_Backtab):
+                self.advance = -1 if key == Qt.Key_Backtab or event.modifiers() & Qt.ShiftModifier else 1
+                self.submit()
+                if not self.isVisible() or self.result() == QDialog.Accepted:
+                    return True
+                self.advance = 0
+                return True
+        return super().eventFilter(obj, event)
 
     def load_font(self):
         path, _ = QFileDialog.getOpenFileName(self, "Выберите шрифт", "", "Шрифты (*.ttf *.otf)")
@@ -342,6 +471,7 @@ class TextTab(QWidget, UndoMixin):
         self.view = TextView()
         self.mode.currentIndexChanged.connect(self.update_mode)
         self.view.picked.connect(self.edit)
+        self.view.missed.connect(self.missed)
         body = QHBoxLayout()
         self.thumbs = QListWidget()
         self.thumbs.setAccessibleName("Миниатюры страниц")
@@ -398,6 +528,7 @@ class TextTab(QWidget, UndoMixin):
             self.source = self.doc.tobytes()
         self.set_state(self.edits + additions)
         self.commit("правка текста")
+        self.refresh_steps()
 
     def accept_files(self, paths):
         if len(paths) == 1:
@@ -409,7 +540,7 @@ class TextTab(QWidget, UndoMixin):
     def open(self, path, page_number=0, layout=None):
         if not path:
             return False
-        if (self.path == path and self.page_layout == layout and os.path.isfile(path)
+        if (same_path(self.path, path) and self.page_layout == layout and os.path.isfile(path)
                 and editor.file_stamp(path) == self.stamp):
             self.page_num.setValue(page_number + 1)
             return True
@@ -473,16 +604,68 @@ class TextTab(QWidget, UndoMixin):
                     hint = "На этой странице нет полей формы. Надпись можно добавить инструментом «Добавить текст»."
         self.hint.setText(hint if ready else "")
         self.view.outline()
+        if ready:
+            self.view.mark([edit.target.rect for edit in self.edits if edit.page == self.number])
+        self.refresh_steps()
+
+    def refresh_steps(self):
+        # Шаги сверху обновляются по таймеру раз в 0,4 с; после открытия файла показываем сразу.
+        if self.header.steps.items:
+            self.header.steps.set_done(self.step_index())
+
+    def missed(self):
+        if self.view.mode == "line" and self.view.targets:
+            self.hint.setText("Здесь нет строки текста. Щёлкните прямо по словам или нажмите Tab, "
+                              "чтобы перебрать строки. Для новой надписи выберите «Добавить текст».")
+
+    def place(self, dlg, target):
+        """Окно правки — рядом со строкой, а не посреди экрана: видно, что именно меняем."""
+        view = self.view
+        box = view.mapFromScene(view.scene_rect(target.rect)).boundingRect()
+        below = view.viewport().mapToGlobal(box.bottomLeft())
+        above = view.viewport().mapToGlobal(box.topLeft())
+        screen = (self.screen() or dlg.screen()).availableGeometry()
+        size = dlg.sizeHint().expandedTo(dlg.geometry().size())   # dlg.size — поле «Размер» шрифта
+        x = min(max(screen.left(), below.x() - 16), screen.right() - size.width())
+        y = below.y() + 8
+        if y + size.height() > screen.bottom():
+            y = above.y() - size.height() - 8
+        dlg.move(x, max(screen.top(), y))
 
     def edit(self, target):
-        try:
-            self.view.outline(target.rect)
-            dlg = EditDialog(self, target)
-            dlg.exec()
-            dlg.deleteLater()
-        except Exception as exc:
-            error(self, human_error(exc))
+        while target is not None:
+            advance = 0
+            try:
+                self.view.outline(target.rect)
+                dlg = EditDialog(self, target)
+                self.place(dlg, target)
+                dlg.exec()
+                advance = dlg.advance if dlg.result() == QDialog.Accepted else 0
+                dlg.deleteLater()
+            except Exception as exc:
+                error(self, human_error(exc))
+            target = self.neighbour(target, advance) if advance else None
+        self.view.current = None
         self.view.outline()
+
+    def neighbour(self, target, delta):
+        """Следующая строка после правки: список строк перестроен, ищем по положению."""
+        order = reading_order(self.view.targets)
+        if not order:
+            return None
+        here = pdf.Rect(target.rect)
+        same = [t for t in order if pdf.Rect(t.rect).intersects(here)
+                and abs(pdf.Rect(t.rect).y0 - here.y0) < max(1.0, here.height / 2)]
+        if same:
+            index = order.index(min(same, key=lambda t: abs(pdf.Rect(t.rect).x0 - here.x0)))
+        else:
+            index = next((i for i, t in enumerate(order) if reading_order([t, target])[0] is target), len(order))
+            index -= 1 if delta > 0 else 0
+        index += delta
+        if not 0 <= index < len(order):
+            return None
+        self.view.current = order[index]
+        return order[index]
 
     def eventFilter(self, obj, event):
         if event.type() in (QEvent.Show, QEvent.Resize):

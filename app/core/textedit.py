@@ -221,13 +221,35 @@ def apply(page, edit):
     if areas:
         _protect(page, areas)
         for a in areas:
-            page.add_redact_annot(a, fill=(1, 1, 1) if edit.mode == "scan" else False, cross_out=False)
+            page.add_redact_annot(a, fill=paper_color(page, a) if edit.mode == "scan" else False, cross_out=False)
         page.apply_redactions(images=2 if edit.mode == "scan" else 0, graphics=0, text=0)
         if shape is not None:
             shape = layout()
     if shape is not None:
         shape.commit()
     return font.name
+
+
+def paper_color(page, rect, margin=6):
+    """Цвет бумаги вокруг участка скана: белая заплатка на тонированном скане заметна."""
+    import numpy as np
+    area = (pdf.Rect(rect) + (-margin, -margin, margin, margin)) & page.rect
+    if area.is_empty:
+        return (1, 1, 1)
+    clip = (area * page.rotation_matrix).normalize()
+    inner = (pdf.Rect(rect) * page.rotation_matrix).normalize()
+    scale = min(2.0, 600 / max(clip.width, clip.height, 1))
+    pix = page.get_pixmap(matrix=pdf.Matrix(scale, scale).prerotate(0), clip=clip, alpha=False,
+                          colorspace=pdf.csRGB)
+    rgb = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.stride)[:, :pix.width * 3]
+    rgb = rgb.reshape(pix.height, pix.width, 3).astype(float)
+    ys, xs = np.mgrid[0:pix.height, 0:pix.width]
+    px, py = clip.x0 + (xs + .5) / scale, clip.y0 + (ys + .5) / scale
+    ring = ~((px >= inner.x0) & (px <= inner.x1) & (py >= inner.y0) & (py <= inner.y1))
+    sample = rgb[ring] if ring.any() else rgb.reshape(-1, 3)
+    light = sample.mean(axis=1)
+    paper = sample[light >= np.percentile(light, 60)]       # буквы и пыль — темнее бумаги
+    return tuple(float(v) / 255 for v in np.median(paper, axis=0))
 
 
 def file_stamp(path):
@@ -290,10 +312,6 @@ def set_field(field, value):
 
 
 def recognize(page, rect):
-    clip = pdf.Rect(rect) * page.rotation_matrix
-    scale = min(300/72, 3200/max(clip.width, clip.height))
-    pix = page.get_pixmap(matrix=pdf.Matrix(scale, scale), clip=clip, alpha=False)
-    pix.set_dpi(round(72*scale), round(72*scale))
-    data = pix.pdfocr_tobytes(language="rus+eng", tessdata=resource("core", "models", "tessdata"))
-    with pdf.open("pdf", data) as ocr:
-        return ocr[0].get_text().strip()
+    """Распознанный текст участка скана; строки — в порядке сверху вниз, как на странице."""
+    from .ocr import recognize as run
+    return run(page, rect)
