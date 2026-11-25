@@ -5,7 +5,7 @@ import copy
 import os
 import re
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QSize, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
                                QListWidget, QListWidgetItem, QMessageBox, QProgressBar, QPushButton, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout,
@@ -95,6 +95,7 @@ class PairFilesDialog(QDialog):
     def append_files(self, paths):
         for path in paths:
             item = QListWidgetItem()
+            item.setSizeHint(QSize(0, max(30, self.files.fontMetrics().height() + 10)))
             item.setData(Qt.UserRole, path)
             item.setToolTip(path)
             self.files.addItem(item)

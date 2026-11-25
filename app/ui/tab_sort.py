@@ -44,7 +44,7 @@ class SortTab(QWidget, UndoMixin):
         lay.setSpacing(12)
         self.header = ScreenHeader("Сортировка страниц",
                                    "Введите для страниц номера или текстовые метки. Номера квартир можно получить из текста или распознать на скане.",
-                                   ["Откройте PDF", "Проверьте номера", "Сохраните по порядку"])
+                                   ["Откройте PDF", "Проверьте метки", "Сохраните по порядку"])
         lay.addWidget(self.header)
         top = QHBoxLayout()
         top.setSpacing(10)
@@ -83,7 +83,8 @@ class SortTab(QWidget, UndoMixin):
         self.table.setHorizontalHeaderLabels(["Страница", "Номер / метка", "Примечание"])
         self.table.setIconSize(QSize(60, 84))
         self.table.verticalHeader().setDefaultSectionSize(90)
-        self.table.setColumnWidth(0, 140)
+        self.table.setColumnWidth(0, 126)
+        self.table.setColumnWidth(1, 164)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setStyleSheet("QTableWidget { font-size: 16px; }")
         self.table.itemChanged.connect(self.item_edited)
@@ -441,6 +442,8 @@ class SortTab(QWidget, UndoMixin):
             if self.tpl_names.get(p):
                 note = (note + "  " if note else "") + f"[бланк: {self.tpl_names[p]}]"
             self.table.item(r, 2).setText(note)
+            self.table.item(r, 1).setToolTip(v)
+            self.table.item(r, 2).setToolTip(note)
         self.table.blockSignals(False)
         empty = sum(1 for v in vals if not v)
         self.sync_actions()

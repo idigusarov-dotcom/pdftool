@@ -59,6 +59,20 @@ def test_sort_marks_and_exports_same_page_order(win, tmp_path):
     assert [s.table.item(i, 1).text() for i in range(5)] == ["2", "12А", "012а", "Раздел 2", "Раздел 10"]
 
 
+def test_replacing_unsaved_sort_can_be_cancelled(win, tmp_path, monkeypatch):
+    original = make_pdf(tmp_path / "Исходник.pdf", ["1"])
+    other = make_pdf(tmp_path / "Другой.pdf", ["2"])
+    s = win.sort
+    s.open(original)
+    s.table.item(0, 1).setText("Раздел 1")
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: QMessageBox.Cancel)
+    s.open(other)
+    assert s.path == original and s.values_by_page() == ["Раздел 1"]
+    monkeypatch.setattr(QMessageBox, "exec", lambda box: QMessageBox.Discard)
+    s.open(other)
+    assert s.path == other and not s.is_dirty()
+
+
 def test_import_odd_file_count_and_edit_pairs(win, tmp_path, monkeypatch):
     b = win.batch
     names = [str(tmp_path / f"{name}.pdf") for name in ["Расписки", "Акты", "Контракт", "Приложение"]]
