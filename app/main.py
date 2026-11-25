@@ -5,6 +5,8 @@ import os
 import sys
 import traceback
 
+from shiboken6 import isValid
+
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QDialogButtonBox, QFileDialog, QFrame,
@@ -155,6 +157,9 @@ class MainWindow(QMainWindow):
         return h
 
     def _sync_history_buttons(self):
+        # При завершении Qt очищает историю вкладок уже после удаления контейнера экранов.
+        if not isValid(self.tabs):
+            return
         stack = getattr(self.current(), "undo_stack", None)
         self.btn_undo.setEnabled(stack is not None and stack.canUndo())
         self.btn_redo.setEnabled(stack is not None and stack.canRedo())
