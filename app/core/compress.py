@@ -16,7 +16,7 @@ from typing import Callable
 import pymupdf
 from PIL import Image
 
-from .pdfutil import Cancelled, PdfError, open_pdf, staged_pdf  # noqa: F401 — Cancelled для вызывающих
+from .pdfutil import Cancelled, PdfError, human_error, open_pdf, safe_output_path, staged_pdf  # noqa: F401 — Cancelled для вызывающих
 
 
 @dataclass(frozen=True)
@@ -123,6 +123,32 @@ def compress(path: str, out_path: str, level: str = DEFAULT_LEVEL,
     finally:
         doc.close()
     return {"before": before, "after": after, "saved": saved, "images": len(use), "changed": changed}
+
+
+def compress_many(paths: list[str], level: str, progress=None) -> list[tuple[str, str, str]]:
+    """Для каждого исходника возвращает путь, имя сохранённой копии и итог обработки."""
+    results = []
+    for index, path in enumerate(paths):
+        def update(done, total):
+            if progress:
+                progress(index, len(paths))
+
+        try:
+            update(0, 1)
+            out = safe_output_path(path, "сжатый")
+            report = compress(path, out, level, update, only_if_smaller=True)
+        except Cancelled:
+            results.extend((p, "", "Остановлено") for p in paths[index:])
+            break
+        except (OSError, PdfError, RuntimeError, ValueError) as exc:
+            results.append((path, "", human_error(exc)))
+        else:
+            if report["saved"]:
+                sizes = f"{human_size(report['before'])} → {human_size(report['after'])}"
+                results.append((path, out, sizes))
+            else:
+                results.append((path, "", "Уже хорошо сжат"))
+    return results
 
 
 def human_size(n: int) -> str:
