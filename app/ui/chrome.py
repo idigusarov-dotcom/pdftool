@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLayout, QPushButton,
                                QToolButton, QVBoxLayout, QWidget)
 
@@ -212,20 +213,87 @@ class ElideLabel(QLabel):
         p.end()
 
 
-class DropZone(QFrame):
-    """Плашка «Перетащите PDF сюда или нажмите»; после загрузки показывает имя файла."""
+class PdfDropFrame(QFrame):
     files = Signal(list)
+
+    def __init__(self, parent=None, exts=(".pdf",)):
+        super().__init__(parent)
+        self.exts = exts
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, e):
+        if pdf_paths(e.mimeData(), self.exts):
+            e.acceptProposedAction()
+            self.setProperty("hover", "true")
+            _repolish(self)
+
+    def dragLeaveEvent(self, e):
+        self.setProperty("hover", "false")
+        _repolish(self)
+
+    def dropEvent(self, e):
+        self.setProperty("hover", "false")
+        _repolish(self)
+        ps = pdf_paths(e.mimeData(), self.exts)
+        if ps:
+            e.acceptProposedAction()
+            self.files.emit(ps)
+
+
+class FileOpenButton(QPushButton):
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not event.modifiers():
+            event.accept()
+            if not event.isAutoRepeat():
+                self.click()
+        else:
+            super().keyPressEvent(event)
+
+
+class FileStartPanel(PdfDropFrame):
+    """Основное действие до открытия документа. Вся панель принимает файлы."""
+    def __init__(self, title, hint, action, choose):
+        super().__init__()
+        self.setObjectName("FileStart")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(10)
+        layout.addStretch()
+        logo = QLabel()
+        pm = QPixmap(style.asset("icons", "app-logo.png"))
+        pm.setDevicePixelRatio(pm.width() / 80)
+        logo.setPixmap(pm)
+        layout.addWidget(logo, 0, Qt.AlignHCenter)
+        heading = QLabel(title)
+        heading.setObjectName("StartTitle")
+        layout.addWidget(heading, 0, Qt.AlignHCenter)
+        description = QLabel(hint)
+        description.setObjectName("ScreenSub")
+        description.setAlignment(Qt.AlignCenter)
+        description.setWordWrap(True)
+        layout.addWidget(description)
+        layout.addSpacing(6)
+        self.button = FileOpenButton(action)
+        self.button.setProperty("kind", "primary")
+        self.button.setToolTip(title)
+        self.button.setMinimumWidth(152)
+        self.button.setCursor(Qt.PointingHandCursor)
+        self.button.clicked.connect(choose)
+        layout.addWidget(self.button, 0, Qt.AlignHCenter)
+        layout.addStretch()
+
+
+class DropZone(PdfDropFrame):
+    """Плашка «Перетащите PDF сюда или нажмите»; после загрузки показывает имя файла."""
     clicked = Signal()
 
     def __init__(self, title: str, hint: str = "Перетащите PDF сюда или нажмите, чтобы выбрать",
                  exts=(".pdf",), icon_name: str = "file-plus", parent=None):
-        super().__init__(parent)
+        super().__init__(parent, exts)
         self.setObjectName("DropZone")
-        self.setAcceptDrops(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self._pressed = False
         self.setCursor(Qt.PointingHandCursor)
-        self.exts = exts
         self._title, self._hint, self._icon = title, hint, icon_name
         h = QHBoxLayout(self)
         h.setContentsMargins(14, 10, 14, 10)
@@ -285,25 +353,6 @@ class DropZone(QFrame):
                 self.clicked.emit()
         else:
             super().keyPressEvent(e)
-
-    def dragEnterEvent(self, e):
-        if pdf_paths(e.mimeData(), self.exts):
-            e.acceptProposedAction()
-            self.setProperty("hover", "true")
-            _repolish(self)
-
-    def dragLeaveEvent(self, e):
-        self.setProperty("hover", "false")
-        _repolish(self)
-
-    def dropEvent(self, e):
-        self.setProperty("hover", "false")
-        _repolish(self)
-        ps = pdf_paths(e.mimeData(), self.exts)
-        if ps:
-            e.acceptProposedAction()
-            self.files.emit(ps)
-
 
 class Toast(QFrame):
     """Всплывающее уведомление внизу справа; исчезает само."""

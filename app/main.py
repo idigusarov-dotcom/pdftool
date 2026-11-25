@@ -5,6 +5,8 @@ import os
 import sys
 import traceback
 
+from shiboken6 import isValid
+
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDialog, QDialogButtonBox, QFileDialog, QFrame,
@@ -12,7 +14,7 @@ from PySide6.QtWidgets import (QAbstractButton, QApplication, QButtonGroup, QDia
                                QRadioButton, QScrollArea, QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
 from . import APP_NAME, __version__
-from .core.logsetup import log, log_dir, setup_logging
+from .core.logsetup import data_dir, log, log_dir, log_file, setup_logging
 from .ui import style
 from .ui.chrome import Collapsible, DropZone, Toast, pdf_paths
 from .ui.helppage import HelpPage
@@ -25,19 +27,21 @@ from .ui.tab_image import ImageTab
 from .ui.tab_pages import PagesTab
 from .ui.tab_sign import SignTab
 from .ui.tab_sort import SortTab
+from .ui.tab_text import TextTab
 
 
 IS_MAC = sys.platform == "darwin"
 COMPACT_BELOW = 1180          # уже этого окна боковая панель показывает только значки
 THEMES = [("system", "Как в системе"), ("light", "Светлая"), ("dark", "Тёмная")]
 
-SCREENS = [("sign", "Подписи", "pen-tool", "Перенос подписей из актов в расписки"),
-           ("batch", "Пакет", "layers", "Много пар файлов за один раз"),
-           ("fragment", "Фрагменты", "scissors", "Вырезать подпись/печать из одного PDF и поставить в другой"),
-           ("sort", "Сортировка", "list-ordered", "Разложить страницы по номерам квартир"),
-           ("image", "Картинка", "image", "Поставить печать или подпись-картинку"),
-           ("pages", "Страницы", "files", "Объединить, повернуть, удалить, разделить"),
-           ("compress", "Сжатие", "file-down", "Уменьшить PDF со сканами для отправки по почте"),
+SCREENS = [("pages", "Страницы", "files", "Открыть PDF, изменить порядок страниц или объединить файлы"),
+           ("text", "Текст", "pencil", "Изменить текст, исправить скан или заполнить форму"),
+           ("image", "Картинка", "image", "Вставить изображение в PDF"),
+           ("fragment", "Фрагменты", "scissors", "Скопировать область одной страницы на другую"),
+           ("compress", "Сжатие", "file-down", "Уменьшить размер PDF"),
+           ("sort", "Сортировка", "list-ordered", "Упорядочить страницы по номерам или меткам"),
+           ("batch", "Пакет", "layers", "Сжать несколько PDF или перенести подписи для нескольких пар"),
+           ("sign", "Подписи", "pen-tool", "Перенос подписей из актов в расписки"),
            ("help", "Справка", "book-open-check", "Как пользоваться программой")]
 
 
@@ -78,15 +82,15 @@ class MainWindow(QMainWindow):
         self.sort = SortTab()
         self.image = ImageTab()
         self.pages = PagesTab()
+        self.text = TextTab()
+        self.pages.edit_text.connect(self.edit_document)
         self.compress = CompressTab()
         self.fragment = FragmentTab()
         self.batch = BatchTab(self.sign, lambda: self.show_screen(self.sign))
         for bar in (self.sign.tbar, self.sort.tbar):
             bar.changed.connect(self.templates_changed)
-        self.helppage = HelpPage([("Подписи", self.sign), ("Пакет", self.batch),
-                                  ("Фрагменты (вырезать и перенести)", self.fragment), ("Сортировка", self.sort),
-                                  ("Картинка", self.image), ("Страницы", self.pages),
-                                  ("Сжатие", self.compress)], self.start_tour)
+        self.helppage = HelpPage([(label, getattr(self, key)) for key, label, *_ in SCREENS if key != "help"],
+                                 self.start_tour)
 
         # Каркас как в приложениях macOS: слева боковая панель на всю высоту (название, разделы),
         # справа — строка инструментов и сам экран.
@@ -117,8 +121,8 @@ class MainWindow(QMainWindow):
         self._step_timer = QTimer(self, interval=400, timeout=self.refresh_steps)
         self._step_timer.start()
         self.resize(1366, 768)
-        self.show_screen(self.sign)
-        self._screen_changed(0)
+        self.show_screen(self.pages)
+        self._screen_changed(self.tabs.currentIndex())
 
     # ---------- каркас ----------
     def _build_header(self):
@@ -153,6 +157,9 @@ class MainWindow(QMainWindow):
         return h
 
     def _sync_history_buttons(self):
+        # При завершении Qt очищает историю вкладок уже после удаления контейнера экранов.
+        if not isValid(self.tabs):
+            return
         stack = getattr(self.current(), "undo_stack", None)
         self.btn_undo.setEnabled(stack is not None and stack.canUndo())
         self.btn_redo.setEnabled(stack is not None and stack.canRedo())
@@ -198,7 +205,7 @@ class MainWindow(QMainWindow):
         self._brand_text.setLayout(names)
         brand.addWidget(self._brand_text, 1)
         v.addLayout(brand)
-        self._section = QLabel("Инструменты")
+        self._section = QLabel("Работа с PDF")
         self._section.setObjectName("SideSection")
         v.addWidget(self._section)
         self.nav = {}
@@ -206,6 +213,10 @@ class MainWindow(QMainWindow):
         grp = QButtonGroup(self)
         grp.setExclusive(True)
         for i, (key, label, ic, tip) in enumerate(SCREENS):
+            if key == "sign":
+                self._special_section = QLabel("Акты и расписки")
+                self._special_section.setObjectName("SideSection")
+                v.addWidget(self._special_section)
             if key == "help":
                 v.addStretch()
             b = QPushButton(label)
@@ -218,7 +229,10 @@ class MainWindow(QMainWindow):
             b.setAccessibleName(label)     # в узком окне текста нет — имя для экранного диктора и UI Automation
             self._nav_labels[key] = label
             b.setCursor(Qt.PointingHandCursor)
-            b.clicked.connect(lambda _=False, k=i: self.tabs.setCurrentIndex(k))
+            if key == "text":
+                b.clicked.connect(self.show_text_editor)
+            else:
+                b.clicked.connect(lambda _=False, k=i: self.tabs.setCurrentIndex(k))
             grp.addButton(b)
             v.addWidget(b)
             self.nav[key] = b
@@ -242,6 +256,7 @@ class MainWindow(QMainWindow):
         self.sidebar.setProperty("compact", "true" if on else "false")
         self._brand_text.setVisible(not on)
         self._section.setVisible(not on)
+        self._special_section.setVisible(not on)
         for key, b in self.nav.items():
             b.setText("" if on else self._nav_labels[key])
         self.sidebar.style().unpolish(self.sidebar)
@@ -252,22 +267,23 @@ class MainWindow(QMainWindow):
 
     def _save_current(self):
         tab = self.current()
-        if tab is self.pages:
-            focus = QApplication.focusWidget()
-            in_merge = focus is not None and self.pages.card_merge.isAncestorOf(focus)
-            if in_merge or not self.pages.btn_save.isEnabled():
-                self.pages.btn_merge.click()
-                return
+        if tab is self.pages and self.pages.modes.currentIndex() == 1:
+            self.pages.btn_merge.click()
+            return
         button = getattr(tab, "btn_save", None)
         if button is not None:
             button.click()
 
     def _actions(self):
+        self.open_action = QAction("Открыть…", self)
+        self.open_action.setShortcut(QKeySequence.Open)
+        self.open_action.triggered.connect(self.choose_files)
         self.save_action = QAction("Сохранить копию PDF…", self)
         self.save_action.setShortcut(QKeySequence.Save)
         self.save_action.triggered.connect(self._save_current)
         if IS_MAC:          # на Mac сочетания клавиш живут в строке меню (⌘Z, ⇧⌘Z, ⌘?)
             return
+        self.addAction(self.open_action)
         self.addAction(self.save_action)
         for seq, fn in ((QKeySequence.Undo, self.undo), (QKeySequence.Redo, self.redo),
                         (QKeySequence("Ctrl+Shift+Z"), self.redo), (QKeySequence.HelpContents, self.start_tour)):
@@ -281,7 +297,7 @@ class MainWindow(QMainWindow):
         переносит в меню приложения."""
         mb = self.menuBar()
         app_m = mb.addMenu("Файл")
-        app_m.addAction("Открыть…", self.choose_files).setShortcut(QKeySequence.Open)
+        app_m.addAction(self.open_action)
         app_m.addAction(self.save_action)
         a = app_m.addAction("О программе «PDF-помощник»", self.about)
         a.setMenuRole(QAction.AboutRole)
@@ -330,7 +346,7 @@ class MainWindow(QMainWindow):
                 w.setTitle(style.key(w.title()))
 
     def all_tabs(self):
-        return [self.sign, self.batch, self.fragment, self.sort, self.image, self.pages, self.compress]
+        return [self.sign, self.batch, self.fragment, self.sort, self.image, self.pages, self.compress, self.text]
 
     def show_screen(self, w):
         self.tabs.setCurrentWidget(w)
@@ -388,6 +404,8 @@ class MainWindow(QMainWindow):
         w = self.current()
         opened = {c: c.is_expanded() for c in w.findChildren(Collapsible)}
         steps = [st for st in w.tour_steps() if st.target is None or st.target.window() is self]
+        if w in (self.pages, self.text):
+            steps = [st for st in steps if st.target is None or st.target.isVisibleTo(w)]
         self.tour = TourOverlay(self.centralWidget(), steps, SCREENS[self.tabs.currentIndex()][0])
         def done():
             self.tour = None
@@ -544,7 +562,11 @@ class MainWindow(QMainWindow):
         paths, _ = QFileDialog.getOpenFileNames(self, "Открыть", last_dir(), "PDF и картинки (*.pdf *.png *.jpg *.jpeg)")
         if paths:
             remember_dir(paths[0])
-            self.open_files(paths)
+            if self.current() is self.pages and self.pages.modes.currentIndex() == 1 and all(
+                    path.lower().endswith(".pdf") for path in paths):
+                self.pages.add_files(paths)
+            else:
+                self.open_files(paths)
 
     def open_files(self, paths: list[str]):
         """Файлы, открытые через систему (перетащили на значок в Dock, «Открыть с помощью»)."""
@@ -561,6 +583,17 @@ class MainWindow(QMainWindow):
         self.show_screen(w)
         w.accept_files(paths)
 
+    def show_text_editor(self):
+        if (self.current() is self.pages and self.pages.modes.currentIndex() == 0
+                and self.pages.grid.count() and self.text.doc is None):
+            self.pages.open_text()
+        else:
+            self.show_screen(self.text)
+
+    def edit_document(self, path, page, layout=None):
+        if self.text.open(path, page, layout):
+            self.show_screen(self.text)
+
     def templates_changed(self):
         for bar in (self.sign.tbar, self.sort.tbar):
             bar.reload()
@@ -568,7 +601,7 @@ class MainWindow(QMainWindow):
 
     def about(self):
         QMessageBox.about(self, "О программе", f"{APP_NAME}\nВерсия {__version__}\n\n"
-                          f"Журнал ошибок и шаблоны: {log_dir()}\n\n"
+                          f"Журнал: {log_file() or 'недоступен'}\nПапка данных: {data_dir()}\n\n"
                           "Шрифт Inter (SIL OFL 1.1), иконки Lucide (ISC).")
 
     def closeEvent(self, e):
@@ -586,7 +619,7 @@ class MainWindow(QMainWindow):
             for t in self.all_tabs():
                 t.undo_stack.setClean()
         names = {self.sign: "Подписи", self.batch: "Пакет", self.sort: "Сортировка", self.image: "Картинка",
-                 self.pages: "Страницы", self.fragment: "Фрагменты", self.compress: "Сжатие"}
+                 self.pages: "Страницы", self.text: "Текст", self.fragment: "Фрагменты", self.compress: "Сжатие"}
         dirty = [names[t] for t in self.all_tabs() if t.is_dirty()]
         if dirty:
             ans = QMessageBox.question(
@@ -608,10 +641,11 @@ def install_excepthook():
         text = "".join(traceback.format_exception(etype, value, tb))
         log.error("Необработанная ошибка:\n%s", text)
         try:
+            path = log_file()
+            details = f"\n\nЖурнал ошибок: {path}" if path else ""
             QMessageBox.critical(None, "Ошибка",
                                  "Что-то пошло не так, но ваши файлы не изменены.\n\n"
-                                 f"Причина: {value}\n\nПодробности записаны в журнал:\n"
-                                 f"{os.path.join(log_dir(), 'log.txt')}\n(меню «Справка» → «Открыть папку с логами»)")
+                                 f"Причина: {value}{details}")
         except Exception:  # noqa: BLE001
             pass
     sys.excepthook = hook

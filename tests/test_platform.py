@@ -129,15 +129,15 @@ def test_edit_with_file_dialogs_and_history_buttons(win, tmp_path):
     previous = app.testAttribute(attr)
     app.setAttribute(attr, True)
     try:
-        pages.dz.setFocus()
+        pages.start_one.button.setFocus()
         QTimer.singleShot(100, choose)
-        QTest.keyClick(pages.dz, Qt.Key_Space)
+        QTest.keyClick(pages.start_one.button, Qt.Key_Space)
         assert not pages.path
-        QTest.mousePress(pages.dz, Qt.LeftButton)
-        QTest.mouseRelease(pages.dz, Qt.LeftButton, pos=QPoint(-4, -4))
+        QTest.mousePress(pages.start_one.button, Qt.LeftButton)
+        QTest.mouseRelease(pages.start_one.button, Qt.LeftButton, pos=QPoint(-4, -4))
         QTimer.singleShot(100, lambda: choose(pdf))
-        QTest.keyClick(pages.dz, Qt.Key_Return)
-        assert pages.path == pdf and not win.btn_undo.isEnabled()
+        QTest.keyClick(pages.start_one.button, Qt.Key_Return)
+        assert os.path.samefile(pages.path, pdf) and not win.btn_undo.isEnabled()
         first = pages.grid.visualItemRect(pages.grid.item(0)).center()
         QTest.mouseClick(pages.grid.viewport(), Qt.LeftButton, pos=first)
         QTest.mouseClick(pages.btn_rot, Qt.LeftButton)
@@ -154,13 +154,17 @@ def test_edit_with_file_dialogs_and_history_buttons(win, tmp_path):
         assert len(doc) == 2 and doc[0].rotation == 90 and doc[1].rotation == 0
 
 
-def test_thumbnails_follow_visible_grid(win):
+def test_thumbnails_follow_visible_grid(win, tmp_path):
     from app.ui.thumbs import visible_rows
 
     win.show_screen(win.pages)
     grid = win.pages.grid
-    for i in range(300):
-        win.pages._add_page_item(i)
+    path = str(tmp_path / "pages.pdf")
+    with pymupdf.open() as doc:
+        for _ in range(300):
+            doc.new_page()
+        doc.save(path)
+    win.pages.open(path)
     for width in (1024, 1280):
         win.resize(width, 720)
         app.processEvents()
@@ -231,6 +235,7 @@ def test_preview_extract_and_save_current_pages(win, tmp_path, monkeypatch):
         assert len(result) == 6
     with pymupdf.open(pdf) as original:
         assert all(page.rotation == 0 for page in original)
+    pg.modes.setCurrentIndex(0)
     pg.grid.setFocus()
     QTest.keyClick(pg.grid, Qt.Key_Backspace)
     assert pg.grid.count() == 2 and not pg.btn_extract.isEnabled()
@@ -251,6 +256,7 @@ def test_no_horizontal_scroll(win, width, tmp_path):
     win.sort.open(acts)
     win.image.open_pdf(acts)
     win.batch.add_pair(acts, rec)
+    assert win.text.open(acts) and win.text.doc is not None
     win.sign.advanced.set_expanded(True)
     win.sort.advanced.set_expanded(True)
     win.resize(width, 720)
@@ -261,6 +267,15 @@ def test_no_horizontal_scroll(win, width, tmp_path):
         win.tabs.setCurrentIndex(i)
         app.processEvents()
         assert win.tabs.widget(i).horizontalScrollBar().maximum() == 0, type(win.tabs.currentWidget()).__name__
+    # «Текст» с открытым файлом: панель с масштабом, номером страницы и «Сохранить копию» видна без прокрутки.
+    win.show_screen(win.text)
+    app.processEvents()
+    area = win.tabs.widget(win.tabs.currentIndex())
+    assert area.verticalScrollBar().maximum() == 0
+    save = win.text.btn_save
+    bottom = save.mapTo(area.viewport(), save.rect().bottomLeft()).y()
+    assert save.isVisible() and bottom <= area.viewport().height()
+    assert win.text.view.height() >= 200
     for button in (win.fragment.btn_retouch, win.fragment.btn_place):
         assert button.width() >= button.minimumSizeHint().width()
 
@@ -344,3 +359,42 @@ def test_stepbar_compacts(win):
     sb.resize(2000, 40)
     sb._fit()
     assert all(t.isVisibleTo(sb) for t in texts)
+
+def test_separate_page_workspaces_and_text_navigation(win, tmp_path):
+    pages = win.pages
+    win.show_screen(pages)
+    win.resize(900, 560)
+    app.processEvents()
+    assert pages.start_one.button.isVisible() and not pages.grid.isVisible()
+    assert win.tabs.widget(win.tabs.currentIndex()).verticalScrollBar().maximum() == 0
+    path = _pdf(str(tmp_path / "book.pdf"))
+    pages.open(path)
+    pages.grid.setCurrentRow(0)
+    pages.rotate(90)
+    pages.add_files([path, path])
+    assert pages.merge_list.isVisible() and not pages.grid.isVisible()
+    pages.do_merge(str(tmp_path / "merged.pdf"))
+    assert pages.is_dirty()  # Поворот ещё не сохранён.
+    pages.modes.setCurrentIndex(0)
+    assert pages.grid.count() == 2 and pages.grid.currentRow() == 0
+    pages.save(str(tmp_path / "rotated.pdf"))
+    assert not pages.is_dirty()
+    QTest.mouseClick(win.nav["text"], Qt.LeftButton)
+    assert win.current() is win.text and win.text.doc[0].rotation == 90
+
+
+def test_cancel_replacing_edited_pdf(win, tmp_path, monkeypatch):
+    from app.ui import tab_pages
+    pg = win.pages
+    original = _pdf(str(tmp_path / "first.pdf"))
+    another = _pdf(str(tmp_path / "second.pdf"))
+    pg.open(original)
+    pg.grid.setCurrentRow(0)
+    pg.rotate(90)
+    monkeypatch.setattr(QMessageBox, "exec", lambda _: QMessageBox.Save)
+    monkeypatch.setattr(tab_pages, "ask_save", lambda *_: "")
+    pg.open(another)
+    assert pg.path == original and pg.state()[1][0] == 90
+    monkeypatch.setattr(QMessageBox, "exec", lambda _: QMessageBox.Discard)
+    pg.open(another)
+    assert pg.path == another and not pg.is_dirty()

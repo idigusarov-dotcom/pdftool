@@ -1,11 +1,11 @@
-"""Вкладка «Сортировка по квартирам»."""
+"""Сортировка страниц PDF по номерам и текстовым меткам."""
 from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QPixmap
-from PySide6.QtWidgets import (QButtonGroup, QHBoxLayout, QLabel, QProgressDialog, QRadioButton, QSplitter,
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, QTimer
+from PySide6.QtGui import QIcon, QPixmap
+from PySide6.QtWidgets import (QButtonGroup, QComboBox, QHBoxLayout, QLabel, QMessageBox, QProgressDialog, QRadioButton, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..core import numbers, sorting
@@ -35,14 +35,16 @@ class SortTab(QWidget, UndoMixin):
         self.unsure: set[int] = set()   # страницы с неуверенным распознаванием
         self._icons: dict[int, QIcon] = {}
         self.tpl_names: dict[int, str] = {}
+        self.issue_pages = set()
+        self._reading = None
         self._saved = False
         self.zones = {"zone": load_rect("sort/zone1", DEFAULT_ZONE), "zone2": load_rect("sort/zone2", None)}
         lay = QVBoxLayout(self)
         lay.setContentsMargins(24, 18, 24, 16)
         lay.setSpacing(12)
-        self.header = ScreenHeader("Сортировка по квартирам",
-                                   "Страницы раскладываются по номерам квартир. Номер можно вписать или распознать.",
-                                   ["Откройте PDF", "Проверьте номера", "Сохраните по порядку"])
+        self.header = ScreenHeader("Сортировка страниц",
+                                   "Введите для страниц номера или текстовые метки. Номера квартир можно получить из текста или распознать на скане.",
+                                   ["Откройте PDF", "Проверьте метки", "Сохраните по порядку"])
         lay.addWidget(self.header)
         top = QHBoxLayout()
         top.setSpacing(10)
@@ -52,23 +54,42 @@ class SortTab(QWidget, UndoMixin):
         top.addWidget(self.dz, 1)
         self.btn_recognize = big_button("🔢 Распознать номера", self.recognize)
         self.btn_guess = big_button("🔎 Из текста PDF", self.guess, ghost=True)
-        self.btn_order = big_button("↕ Упорядочить таблицу", self.sort_table)
-        for b_ in (self.btn_recognize, self.btn_guess, self.btn_order):
+        self.btn_order = big_button("Упорядочить", self.sort_table, icon_name="arrow-up-down",
+                                    tip="Показать страницы в порядке сохранения")
+        for b_ in (self.btn_recognize, self.btn_guess):
             top.addWidget(b_)
         lay.addLayout(top)
+        controls = QHBoxLayout()
+        self.direction = QComboBox()
+        self.direction.addItems(["По возрастанию", "По убыванию"])
+        self.direction.setAccessibleName("Порядок сортировки PDF и CSV")
+        self.direction.setToolTip("Одинаковые номера сохраняют исходный порядок. Пустые остаются в конце.")
+        self.direction.currentIndexChanged.connect(self.sort_table)
+        controls.addWidget(self.direction)
+        controls.addWidget(self.btn_order)
+        controls.addStretch()
+        self.btn_next = big_button("Следующая для проверки", self.next_issue, icon_name="scan-search",
+                                   tip="Перейти к пропущенному, повторному или неуверенно распознанному номеру")
+        self.btn_confirm = big_button("Номер верен", self.confirm_number, icon_name="check",
+                                      tip="Подтвердить неуверенно распознанный номер выбранной страницы")
+        controls.addWidget(self.btn_next)
+        controls.addWidget(self.btn_confirm)
+        lay.addLayout(controls)
         self.tbar = TemplateBar(self.capture_template)
         self.tbar.applied.connect(self.apply_template)
 
         split = QSplitter(Qt.Horizontal)
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Страница", "Квартира", "Примечание"])
+        self.table.setHorizontalHeaderLabels(["Страница", "Номер / метка", "Примечание"])
         self.table.setIconSize(QSize(60, 84))
         self.table.verticalHeader().setDefaultSectionSize(90)
-        self.table.setColumnWidth(0, 140)
+        self.table.setColumnWidth(0, 126)
+        self.table.setColumnWidth(1, 164)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setStyleSheet("QTableWidget { font-size: 16px; }")
         self.table.itemChanged.connect(self.item_edited)
         self.table.currentCellChanged.connect(lambda r, *_: self.show_page(r))
+        self.table.currentCellChanged.connect(lambda *_: self.sync_actions())
         self.table.verticalScrollBar().valueChanged.connect(self.request_thumbs)
         split.addWidget(self.table)
         right = QWidget()
@@ -101,25 +122,30 @@ class SortTab(QWidget, UndoMixin):
         bottom = QHBoxLayout()
         self.stat = QLabel("")
         self.stat.setObjectName("Muted")
-        bottom.addWidget(self.stat)
-        bottom.addStretch()
+        self.stat.setWordWrap(True)
+        bottom.addWidget(self.stat, 1)
         self.btn_csv = big_button("📋 Сохранить список (CSV)…", self.save_csv)
         self.btn_save = big_button("💾 Сохранить отсортированный PDF…", self.save, primary=True)
         bottom.addWidget(self.btn_csv)
         bottom.addWidget(self.btn_save)
         lay.addLayout(bottom)
+        self.sync_actions()
 
     # ---------- Ctrl+Z ----------
     def get_state(self):
         if not self.doc:
             return None
         order = [self.table.item(r, 0).data(Qt.UserRole) for r in range(self.table.rowCount())]
-        return dict(order=order, values=self.values_by_page(), unsure=set(self.unsure))
+        return dict(order=order, values=self.values_by_page(), unsure=set(self.unsure), direction=self.direction.currentIndex(),
+                    templates=dict(self.tpl_names))
 
     def set_state(self, st):
         if not st:
             return
         self.unsure = set(st["unsure"])
+        self.tpl_names = dict(st.get("templates", {}))
+        with QSignalBlocker(self.direction):
+            self.direction.setCurrentIndex(st.get("direction", 0))
         self._fill(st["order"], st["values"])
 
     # ---------- загрузка ----------
@@ -130,6 +156,25 @@ class SortTab(QWidget, UndoMixin):
         doc = try_open_pdf(self, path)
         if doc is None:
             return
+        if self.is_dirty():
+            box = QMessageBox(QMessageBox.Question, "Открыть другой PDF?",
+                              f"Сохранить текущий порядок страниц в «{os.path.basename(self.path)}»?",
+                              QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, self)
+            box.button(QMessageBox.Save).setText("Сохранить PDF…")
+            box.button(QMessageBox.Discard).setText("Пропустить")
+            box.button(QMessageBox.Cancel).setText("Отмена")
+            box.setDefaultButton(QMessageBox.Save)
+            answer = box.exec()
+            if answer == QMessageBox.Save:
+                self.save()
+            if answer != QMessageBox.Discard and (answer != QMessageBox.Save or self.is_dirty()):
+                doc.close()
+                return
+        if self._reading is not None:
+            self._reading.cancelled = True
+            self._reading = None
+        if self.doc is not None:
+            self.doc.close()
         self.path, self.doc = path, doc
         self.dz.set_loaded(f"{os.path.basename(path)} · {len(self.doc)} стр.")
         self.unsure = set()
@@ -140,15 +185,14 @@ class SortTab(QWidget, UndoMixin):
             self.loader.stop()
         self.loader = ThumbLoader(path, 30)
         self.loader.ready.connect(self.thumb_ready)
-        self._fill(list(range(len(self.doc))), [None] * len(self.doc))
-        found = sorting.guess_all(self.doc)
-        if any(found):
-            self._fill(list(range(len(self.doc))), found)
-        self.table.setCurrentCell(0, 1)
-        QTimer.singleShot(0, self.request_thumbs)
+        with QSignalBlocker(self.direction):
+            self.direction.setCurrentIndex(0)
+        self._fill(list(range(len(self.doc))), sorting.guess_all(self.doc), preserve=False)
         self.reset_undo()
 
-    def _fill(self, order, values):
+    def _fill(self, order, values, preserve=True):
+        current = self.table.item(self.table.currentRow(), 0)
+        selected = current.data(Qt.UserRole) if preserve and current is not None else order[0]
         self.table.blockSignals(True)
         self.table.setRowCount(len(order))
         ph = placeholder_icon()
@@ -161,9 +205,12 @@ class SortTab(QWidget, UndoMixin):
             n = QTableWidgetItem("")
             n.setFlags(n.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(r, 2, n)
+        row = order.index(selected) if selected in order else 0
+        self.table.setCurrentCell(row, 1)
         self.table.blockSignals(False)
+        self.show_page(row)
         self.refresh_marks()
-        QTimer.singleShot(0, self.request_thumbs)
+        QTimer.singleShot(0, self, self.request_thumbs)
 
     def request_thumbs(self, *_):
         if self.loader:
@@ -193,10 +240,11 @@ class SortTab(QWidget, UndoMixin):
         self.commit("номера")
 
     def item_edited(self, item):
-        if item.column() == 1:
-            self.unsure.discard(self.table.item(item.row(), 0).data(Qt.UserRole))
+        if item.column() != 1:
+            return
+        self.unsure.discard(self.table.item(item.row(), 0).data(Qt.UserRole))
         self.refresh_marks()
-        self.commit("номер квартиры")
+        self.commit("метка страницы")
 
     def guess(self, silent=False):
         if not self.doc:
@@ -220,8 +268,7 @@ class SortTab(QWidget, UndoMixin):
     def step_index(self) -> int:
         if not self.doc:
             return 0
-        vals = self.values_by_page()
-        if any(not v for v in vals) or self.unsure:
+        if self.issue_pages:
             return 1
         return 3 if self._saved and not self.is_dirty() else 2
 
@@ -232,10 +279,9 @@ class SortTab(QWidget, UndoMixin):
         from .tour import Step
         adv = lambda: self.advanced.set_expanded(True)   # noqa: E731
         return [
-            Step(None, "Сортировка по квартирам", "Здесь страницы большого PDF (акты, расписки) раскладываются "
-                 "по порядку номеров квартир. Нажимайте «Далее»."),
+            Step(None, "Сортировка страниц", "Задайте номера или текстовые метки. Доступны оба направления сортировки. Страницы без метки всегда идут последними."),
             Step(self.dz, "1. Откройте PDF", "Нажмите или перетащите сюда файл со сканами."),
-            Step(self.table, "Таблица страниц", "Каждая строка — страница файла. В столбце «Квартира» дважды "
+            Step(self.table, "Таблица страниц", "Каждая строка — страница файла. В столбце «Номер / метка» дважды "
                  "щёлкните и впишите номер. <b>Красные</b> — номер повторяется, <b>оранжевые</b> — распознано "
                  "неуверенно, их нужно проверить."),
             Step(self.view, "Страница крупно", "Здесь видна выбранная страница. Зелёная рамка — <b>зона номера</b>: "
@@ -246,6 +292,7 @@ class SortTab(QWidget, UndoMixin):
                  "впишет их в пустые ячейки. Читает неточно — проверьте каждую строку по картинке."),
             Step(self.btn_guess, "Из текста PDF", "Если PDF не скан, а создан на компьютере — номера можно взять "
                  "из текста файла. Для сканов не работает."),
+            Step(self.btn_next, "Страницы для проверки", "Перейдите к пропуску, повтору или неуверенному номеру. Сверьте номер со страницей и исправьте его или нажмите «Номер верен»."),
             Step(self.btn_order, "2. Проверьте и упорядочьте", "Расставляет строки по номеру квартиры, чтобы "
                  "было удобно проверять. Внизу видно, сколько страниц без номера и есть ли повторы."),
             Step(self.advanced, "Шаблоны бланков", "Чтобы не рисовать зоны каждый раз, сохраните их как шаблон "
@@ -262,7 +309,8 @@ class SortTab(QWidget, UndoMixin):
         t = tp.Template(name, zones_rec=zs, src_rect=old.src_rect if old else None,
                         dst_rect=old.dst_rect if old else None, zones_act=old.zones_act if old else [],
                         fp_act=old.fp_act if old else None,
-                        ink_mode=old.ink_mode if old else "blue", sensitivity=old.sensitivity if old else 0.5)
+                        ink_mode=old.ink_mode if old else "blue", sensitivity=old.sensitivity if old else 0.5,
+                        keep_colors=old.keep_colors if old else True)
         if self.doc is not None:
             r = self.table.currentRow()
             p = self.table.item(r, 0).data(Qt.UserRole) if r >= 0 else 0
@@ -289,7 +337,34 @@ class SortTab(QWidget, UndoMixin):
         from .infra import settings
         settings().remove("sort/zone2")
 
+    def sync_actions(self):
+        for control in (self.btn_recognize, self.btn_guess, self.direction, self.btn_order, self.btn_save, self.btn_csv):
+            control.setEnabled(self.doc is not None)
+        self.btn_recognize.setEnabled(self.doc is not None and self._reading is None)
+        self.btn_next.setEnabled(bool(self.issue_pages))
+        item = self.table.item(self.table.currentRow(), 0)
+        self.btn_confirm.setEnabled(item is not None and item.data(Qt.UserRole) in self.unsure)
+
+    def confirm_number(self):
+        item = self.table.item(self.table.currentRow(), 0)
+        if item is not None:
+            self.unsure.discard(item.data(Qt.UserRole))
+            self.refresh_marks()
+            self.commit("подтвердить номер")
+
+    def next_issue(self):
+        count = self.table.rowCount()
+        for offset in range(1, count + 1):
+            row = (self.table.currentRow() + offset) % count
+            if self.table.item(row, 0).data(Qt.UserRole) in self.issue_pages:
+                self.table.setCurrentCell(row, 1)
+                self.table.scrollToItem(self.table.currentItem())
+                self.table.setFocus()
+                return
+
     def recognize(self):
+        if self._reading is not None:
+            return
         if not self.doc:
             return error(self, "Сначала откройте PDF.")
         zones = [z for z in (self.zones["zone"], self.zones["zone2"]) if z is not None]
@@ -305,11 +380,17 @@ class SortTab(QWidget, UndoMixin):
         det: list = []
 
         def done(res):
+            if self._reading is not t:
+                dlg.close()
+                return
+            cancelled = t.cancelled
+            self._reading = None
             dlg.close()
+            self.sync_actions()
             vals = self.values_by_page()
             got = 0
             for p, r in zip(todo, res):
-                if r.text:
+                if r.text and not vals[p]:
                     vals[p] = r.text
                     got += 1
                     if not r.ok:
@@ -317,17 +398,24 @@ class SortTab(QWidget, UndoMixin):
             for p, d in zip(todo, det):
                 self.tpl_names[p] = d.template.name if d.template else ""
             self.set_values(vals)
-            info(self, f"Распознано: {got} из {len(todo)} пустых.\nНеуверенных (оранжевые): "
+            prefix = "Распознавание остановлено. " if cancelled else ""
+            info(self, prefix + f"Распознано: {got} из {len(todo)} пустых.\nНеуверенных (оранжевые): "
                        f"{len([p for p in todo if p in self.unsure])}.\nРукописные цифры распознаются неточно — "
                        f"проверьте все номера по картинке справа.")
 
         def fail(msg):
             dlg.close()
+            if self._reading is not t:
+                return
+            self._reading = None
+            self.sync_actions()
             error(self, "Не удалось распознать: " + msg)
 
         t = run_task(lambda prog: numbers.read_document(path, zones, "blue", progress=prog, pages=todo,
                                                            temps=temps, role="rec", detected=det), done, fail,
                      lambda i, n: dlg.setValue(int(100 * i / max(n, 1))))
+        self._reading = t
+        self.sync_actions()
         dlg.canceled.connect(lambda: setattr(t, "cancelled", True))
 
     def refresh_marks(self, *_):
@@ -335,6 +423,7 @@ class SortTab(QWidget, UndoMixin):
             return
         vals = self.values_by_page()
         dup = sorting.duplicates(vals)
+        self.issue_pages = set()
         self.table.blockSignals(True)
         for r in range(self.table.rowCount()):
             p = self.table.item(r, 0).data(Qt.UserRole)
@@ -346,21 +435,28 @@ class SortTab(QWidget, UndoMixin):
                 note, color = "ПОВТОР", style.mark("#ffcdd2")
             elif p in self.unsure:
                 note, color = "проверьте (распознано неуверенно)", style.mark("#ffcc80")
+            if note:
+                self.issue_pages.add(p)
             for c in (1, 2):
                 self.table.item(r, c).setBackground(color)
             if self.tpl_names.get(p):
                 note = (note + "  " if note else "") + f"[бланк: {self.tpl_names[p]}]"
             self.table.item(r, 2).setText(note)
+            self.table.item(r, 1).setToolTip(v)
+            self.table.item(r, 2).setToolTip(note)
         self.table.blockSignals(False)
         empty = sum(1 for v in vals if not v)
+        self.sync_actions()
+        self.stat.setToolTip(", ".join(sorted(dup, key=sorting.apt_key)))
+        shown = sorted(dup, key=sorting.apt_key)[:4]
         self.stat.setText(f"Страниц: {len(vals)}   без номера: {empty}   повторы: "
-                          f"{', '.join(sorted(dup, key=sorting.apt_key)) or 'нет'}")
+                          f"{', '.join(shown) or 'нет'}" + (f" и ещё {len(dup) - len(shown)}" if len(dup) > len(shown) else ""))
 
     def sort_table(self):
         if not self.doc:
             return
         vals = self.values_by_page()
-        self._fill(sorting.sorted_order(vals), vals)
+        self._fill(sorting.sorted_order(vals, bool(self.direction.currentIndex())), vals)
         self.commit("сортировка")
 
     def show_page(self, r):
@@ -373,13 +469,13 @@ class SortTab(QWidget, UndoMixin):
     def save(self, out: str = ""):
         if not self.doc:
             return error(self, "Сначала откройте PDF.")
-        out = out or ask_save(self, safe_output_path(self.path, "по_квартирам"))
+        out = out or ask_save(self, safe_output_path(self.path, "отсортирован"))
         if out:
             try:
-                sorting.export_sorted(self.path, self.values_by_page(), out)
+                sorting.export_sorted(self.path, self.values_by_page(), out, bool(self.direction.currentIndex()))
                 self.mark_saved()
                 self._saved = True
-                info(self, f"Готово! Страницы сохранены по порядку квартир: {os.path.basename(out)}",
+                info(self, f"Готово! Страницы сохранены в выбранном порядке: {os.path.basename(out)}",
                      action=("Открыть папку", lambda: open_folder(out)))
             except Exception as e:  # noqa: BLE001
                 log.exception("Сортировка")
@@ -388,11 +484,11 @@ class SortTab(QWidget, UndoMixin):
     def save_csv(self, out: str = ""):
         if not self.doc:
             return error(self, "Сначала откройте PDF.")
-        out = out or ask_save(self, safe_output_path(self.path, "список_квартир", ".csv"), "CSV (*.csv)")
+        out = out or ask_save(self, safe_output_path(self.path, "порядок_страниц", ".csv"), "CSV (*.csv)")
         if out:
             try:
                 check_output_path(out, (self.path,))
-                sorting.export_csv(self.values_by_page(), out)
+                sorting.export_csv(self.values_by_page(), out, bool(self.direction.currentIndex()))
             except PdfError as e:
                 return error(self, str(e))
             except PermissionError:

@@ -20,7 +20,7 @@ from . import style
 from .infra import UndoMixin, load_rect, run_task, save_rect, settings
 from .chrome import Collapsible, DropZone, ScreenHeader
 from .preview import open_preview
-from .templbar import TemplateBar
+from .templbar import NONE, TemplateBar
 from .thumbs import ThumbLoader, page_pixmap, placeholder_icon, visible_rows
 from .widgets import (try_open_pdf, open_folder, PageView, ask_open_pdf, ask_save, big_button, error, info, np_to_pixmap, zoom_bar, card, progress_window)
 
@@ -483,11 +483,11 @@ class SignTab(QWidget, UndoMixin):
 
     # ---------- для пакетного режима ----------
     def load_pair(self, acts: str, receipts: str, template: str | None = None, mapping=None,
-                  src_overrides=None, dst_overrides=None):
+                  src_overrides=None, dst_overrides=None, reviewed_settings=None):
         if not (self.open_acts(acts) and self.open_receipts(receipts)):
             return False
+        self.tbar.reload(template or NONE)
         if template:
-            self.tbar.reload(template)
             t = tp.get(template)
             if t:
                 self.apply_template(t)
@@ -495,14 +495,20 @@ class SignTab(QWidget, UndoMixin):
             self.set_mapping(list(mapping))
             self.job.src_overrides = dict(src_overrides or {})
             self.job.dst_overrides = dict(dst_overrides or {})
-            self.show_row(self.table.currentRow())
+            if reviewed_settings is not None:
+                reviewed_settings.apply(self.job)
+                self.set_state(self.get_state())
+            else:
+                self.show_row(self.table.currentRow())
         self.reset_undo()
         return True
 
     def export_pair(self) -> dict | None:
         if not self.job:
             return None
+        from ..core.batch import ReviewedSettings
         return dict(acts=self.acts_path, receipts=self.rec_path, mapping=list(self.job.mapping),
+                    reviewed_settings=ReviewedSettings.from_job(self.job),
                     src_overrides=dict(self.job.src_overrides), dst_overrides=dict(self.job.dst_overrides),
                     template=self.tbar.current_name())
 

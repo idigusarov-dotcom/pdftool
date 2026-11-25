@@ -18,7 +18,8 @@ echo "== dmg"
 STAGE="$(mktemp -d "$(dirname "$OUT")/.pdftool-dmg.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 IMAGE="$STAGE/PdfTool.dmg"
-if python -m dmgbuild -s tools/dmg_settings.py -D app="$APP" -D icon=app/ui/assets/PdfTool.icns "$VOL" "$IMAGE"; then
+python tools/dmg_background.py "$STAGE"
+if python -m dmgbuild -s tools/dmg_settings.py -D app="$APP" -D icon=app/ui/assets/PdfTool.icns -D background="$STAGE/install.png" "$VOL" "$IMAGE"; then
   echo "dmgbuild: ok"
 else
   echo "dmgbuild не сработал — делаю простой dmg через hdiutil"

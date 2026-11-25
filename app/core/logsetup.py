@@ -1,16 +1,16 @@
-"""Журнал ошибок и данные программы:
-Windows — %APPDATA%\\PdfTool, macOS — ~/Library/Application Support/PdfTool, Linux — ~/.local/share/PdfTool."""
+"""Журнал ошибок и данные программы в папке пользователя."""
 from __future__ import annotations
 
 import logging
 import os
 import sys
+import tempfile
 from logging.handlers import RotatingFileHandler
 
 log = logging.getLogger("pdftool")
 
 
-def log_dir() -> str:
+def data_dir() -> str:
     if sys.platform.startswith("win"):
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
     elif sys.platform == "darwin":
@@ -20,19 +20,37 @@ def log_dir() -> str:
     d = os.path.join(base, "PdfTool")
     try:
         os.makedirs(d, exist_ok=True)
-        return d
-    except OSError:  # нет прав — рядом с программой
-        import tempfile   # внутри .app на macOS писать нельзя — во временную папку
+    except OSError:
         d = os.path.join(tempfile.gettempdir(), "PdfTool_logs")
         os.makedirs(d, exist_ok=True)
-        return d
+    return d
 
 
-def setup_logging() -> str:
-    path = os.path.join(log_dir(), "log.txt")
-    if not log.handlers:
-        h = RotatingFileHandler(path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
-        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-        log.addHandler(h)
-        log.setLevel(logging.INFO)
-    return path
+def log_file() -> str | None:
+    return next((h.baseFilename for h in log.handlers if isinstance(h, RotatingFileHandler)), None)
+
+
+def log_dir() -> str:
+    path = log_file()
+    return os.path.dirname(path) if path else data_dir()
+
+
+def setup_logging() -> str | None:
+    if log.handlers:
+        return log_file()
+    try:
+        handler = RotatingFileHandler(os.path.join(data_dir(), "log.txt"), maxBytes=1_000_000,
+                                      backupCount=3, encoding="utf-8")
+    except OSError:
+        # Папка может существовать, но сам log.txt может быть заблокирован или доступен лишь для чтения.
+        try:
+            folder = tempfile.mkdtemp(prefix="PdfTool-logs-")
+            handler = RotatingFileHandler(os.path.join(folder, "log.txt"), maxBytes=1_000_000,
+                                          backupCount=3, encoding="utf-8")
+        except OSError:
+            log.addHandler(logging.NullHandler())
+            return None
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+    return handler.baseFilename

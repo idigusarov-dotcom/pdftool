@@ -120,9 +120,27 @@ def run(out_dir: str) -> int:
         return "ok"
     check("операции с PDF", core)
 
+    def text_editor():
+        import pymupdf
+        from .core import textedit
+        source = os.path.join(work, "Заметки.pdf")
+        result = os.path.join(work, "Заметки с правкой.pdf")
+        _make_pdf(source, 2, font, "Старый текст")
+        with pymupdf.open(source) as doc:
+            target = textedit.spans(doc[0])[0]
+        edit = textedit.Edit(0, "line", target, "Проверка текста", size=14)
+        textedit.save(source, result, [edit], textedit.file_stamp(source))
+        with pymupdf.open(result) as doc:
+            page = doc[0]
+            assert page.get_text().strip() == "Проверка текста"
+            assert doc[1].get_text().strip() == "Старый текст"
+            assert textedit.recognize(page, (55, 72, 310, 120)).strip() == "Проверка текста"
+        return os.path.basename(result)
+    check("редактор текста и автономное распознавание", text_editor)
+
     def window():
         from .ui.infra import settings
-        for k in ("sign", "batch", "fragment", "sort", "image", "pages"):   # без приглашений к подсказкам
+        for k in ("sign", "batch", "fragment", "sort", "image", "pages", "text", "compress"):   # без приглашений к подсказкам
             settings().setValue(f"tour/{k}", True)
         w = MainWindow()
         w.show()
